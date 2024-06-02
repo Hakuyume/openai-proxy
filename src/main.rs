@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(watch(state.clone()));
 
     let app = Router::new()
-        .route("/v1/health", routing::get(|| future::ready(())))
+        .route("/health", routing::get(|| future::ready(())))
         .route("/v1/models", routing::get(v1_models))
         .route("/v1/chat/completions", routing::post(tunnel))
         .route("/v1/completions", routing::post(tunnel))
