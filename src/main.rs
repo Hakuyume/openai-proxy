@@ -203,7 +203,7 @@ async fn tunnel(
     tracing::info!(model = body.model);
 
     if let Some(model) = state.aliases.get(&body.model) {
-        body.model = model.clone();
+        body.model.clone_from(model);
     }
     tracing::info!(model = body.model);
 
