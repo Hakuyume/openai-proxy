@@ -3,6 +3,7 @@ use axum::response::IntoResponse;
 use axum::{extract, routing, Json, Router};
 use bytes::Bytes;
 use futures::TryFutureExt;
+use headers::HeaderMapExt;
 use heck::ToShoutySnakeCase;
 use http::uri::{self, InvalidUriParts, PathAndQuery};
 use http::{request, Request, Response, StatusCode, Uri};
@@ -185,30 +186,26 @@ async fn v1_models(extract::State(state): extract::State<Arc<State>>) -> Json<Li
     Json(List { data: models })
 }
 
+#[derive(Deserialize, Serialize)]
+struct Payload {
+    model: String,
+    #[serde(flatten)]
+    _extra: serde_json::Map<String, serde_json::Value>,
+}
+
 async fn tunnel(
     extract::State(state): extract::State<Arc<State>>,
     mut parts: request::Parts,
-    body: Bytes,
+    Json(mut payload): Json<Payload>,
 ) -> Result<Response<Incoming>, Response<Body>> {
-    let mut body = {
-        #[derive(Deserialize, Serialize)]
-        struct B {
-            model: String,
-            #[serde(flatten)]
-            _extra: serde_json::Map<String, serde_json::Value>,
-        }
-
-        serde_json::from_slice::<B>(&body).map_err(|e| error(StatusCode::BAD_REQUEST, e))?
-    };
-    tracing::info!(model = body.model);
-
-    if let Some(model) = state.aliases.get(&body.model) {
-        body.model.clone_from(model);
+    tracing::info!(model = payload.model);
+    if let Some(model) = state.aliases.get(&payload.model) {
+        payload.model.clone_from(model);
     }
-    tracing::info!(model = body.model);
+    tracing::info!(model = payload.model);
 
     let endpoint = futures::future::join_all(state.endpoints.iter().map(|endpoint| {
-        let model = &body.model;
+        let model = &payload.model;
         async move {
             endpoint
                 .models
@@ -229,14 +226,12 @@ async fn tunnel(
         .uri(mem::take(&mut parts.uri).into_parts().path_and_query)
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     tracing::info!(uri = ?parts.uri);
-    let request = Request::from_parts(
-        parts,
-        Full::new(
-            serde_json::to_vec(&body)
-                .map_err(|e| error(StatusCode::BAD_REQUEST, e))?
-                .into(),
-        ),
-    );
+
+    let body = serde_json::to_vec(&payload).map_err(|e| error(StatusCode::BAD_REQUEST, e))?;
+    parts
+        .headers
+        .typed_insert(headers::ContentLength(body.len() as _));
+    let request = Request::from_parts(parts, Full::new(body.into()));
     let response = state
         .client
         .request(request)
