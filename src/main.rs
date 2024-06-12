@@ -10,6 +10,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper_util::rt::TokioExecutor;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::convert;
 use std::env;
 use std::fmt::Display;
@@ -32,11 +33,13 @@ async fn main() -> anyhow::Result<()> {
         "{}_CONFIG",
         env!("CARGO_BIN_NAME").to_shouty_snake_case()
     ))?)?;
+    tracing::info!(?config);
 
     let state = Arc::new(State {
         client: hyper_util::client::legacy::Client::builder(TokioExecutor::new())
             .build(hyper_util::client::legacy::connect::HttpConnector::new()),
         endpoints: config.endpoints,
+        aliases: config.aliases,
     });
 
     tokio::spawn(watch(state.clone()));
@@ -63,10 +66,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct Config {
     port: u16,
     endpoints: Vec<Endpoint>,
+    #[serde(default)]
+    aliases: HashMap<String, String>,
 }
 
 type Client = hyper_util::client::legacy::Client<
@@ -76,9 +81,10 @@ type Client = hyper_util::client::legacy::Client<
 struct State {
     client: Client,
     endpoints: Vec<Endpoint>,
+    aliases: HashMap<String, String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct Endpoint {
     #[serde(with = "http_serde::uri")]
     uri: Uri,
@@ -109,8 +115,8 @@ async fn watch(state: Arc<State>) {
         let (parts, body) = response.into_parts();
         anyhow::ensure!(parts.status.is_success(), "status = {:?}", parts.status);
         let body = body.collect().await?.to_bytes();
-        let List { data } = serde_json::from_slice(&body)?;
-        Ok(data)
+        let List { data: models } = serde_json::from_slice(&body)?;
+        Ok(models)
     }
 
     futures::future::join_all(state.endpoints.iter().map(|endpoint| {
@@ -157,7 +163,7 @@ where
 }
 
 async fn v1_models(extract::State(state): extract::State<Arc<State>>) -> Json<List<Model>> {
-    let data = futures::future::join_all(
+    let mut models = futures::future::join_all(
         state
             .endpoints
             .iter()
@@ -167,8 +173,16 @@ async fn v1_models(extract::State(state): extract::State<Arc<State>>) -> Json<Li
     .into_iter()
     .flatten()
     .flatten()
-    .collect();
-    Json(List { data })
+    .collect::<Vec<_>>();
+    for (alias, model) in &state.aliases {
+        if let Some(model) = models.iter().find(|m| &m.id == model) {
+            models.push(Model {
+                id: alias.clone(),
+                ..model.clone()
+            });
+        }
+    }
+    Json(List { data: models })
 }
 
 async fn tunnel(
@@ -186,6 +200,9 @@ async fn tunnel(
             .map_err(|e| error(StatusCode::BAD_REQUEST, e))?
             .model
     };
+    tracing::info!(model);
+
+    let model = state.aliases.get(&model).cloned().unwrap_or(model);
     tracing::info!(model);
 
     let endpoint = futures::future::join_all(state.endpoints.iter().map(|endpoint| {
