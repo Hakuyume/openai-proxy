@@ -190,23 +190,25 @@ async fn tunnel(
     mut parts: request::Parts,
     body: Bytes,
 ) -> Result<Response<Incoming>, Response<Body>> {
-    let model = {
-        #[derive(Deserialize)]
-        struct Request {
+    let mut body = {
+        #[derive(Deserialize, Serialize)]
+        struct B {
             model: String,
+            #[serde(flatten)]
+            _extra: serde_json::Map<String, serde_json::Value>,
         }
 
-        serde_json::from_slice::<Request>(&body)
-            .map_err(|e| error(StatusCode::BAD_REQUEST, e))?
-            .model
+        serde_json::from_slice::<B>(&body).map_err(|e| error(StatusCode::BAD_REQUEST, e))?
     };
-    tracing::info!(model);
+    tracing::info!(model = body.model);
 
-    let model = state.aliases.get(&model).cloned().unwrap_or(model);
-    tracing::info!(model);
+    if let Some(model) = state.aliases.get(&body.model) {
+        body.model = model.clone();
+    }
+    tracing::info!(model = body.model);
 
     let endpoint = futures::future::join_all(state.endpoints.iter().map(|endpoint| {
-        let model = &model;
+        let model = &body.model;
         async move {
             endpoint
                 .models
@@ -227,7 +229,14 @@ async fn tunnel(
         .uri(mem::take(&mut parts.uri).into_parts().path_and_query)
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     tracing::info!(uri = ?parts.uri);
-    let request = Request::from_parts(parts, Full::new(body));
+    let request = Request::from_parts(
+        parts,
+        Full::new(
+            serde_json::to_vec(&body)
+                .map_err(|e| error(StatusCode::BAD_REQUEST, e))?
+                .into(),
+        ),
+    );
     let response = state
         .client
         .request(request)
