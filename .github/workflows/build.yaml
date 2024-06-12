@@ -2,13 +2,9 @@ name: build
 
 on:
   push:
-    branches: ["main"]
+    branches: [main]
   pull_request:
-    branches: ["main"]
-
-env:
-  # https://github.com/orgs/community/discussions/25768
-  REPOSITORY: ghcr.io/hakuyume/openai-proxy
+    branches: [main]
 
 jobs:
   cargo-fmt:
@@ -52,6 +48,7 @@ jobs:
           name: openai-proxy
           path: target/release/openai-proxy
   docker:
+    if: github.ref == 'refs/heads/main'
     needs:
       - cargo-build
     runs-on: ubuntu-latest
@@ -74,9 +71,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ env.REPOSITORY }}:${{ github.sha }}
+          tags: |
+            ghcr.io/hakuyume/openai-proxy:${{ github.sha }}
+            ghcr.io/hakuyume/openai-proxy
