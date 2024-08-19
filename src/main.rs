@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(?opts);
 
     let connector = HttpsConnectorBuilder::new()
-        .with_native_roots()?
+        .with_webpki_roots()
         .https_or_http()
         .enable_http1()
         .enable_http2()
