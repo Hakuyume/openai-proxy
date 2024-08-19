@@ -10,6 +10,7 @@ use http::header::HOST;
 use http::{request, Request, Response, StatusCode, Uri};
 use http_body_util::Full;
 use hyper::body::Incoming;
+use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::rt::TokioExecutor;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -60,9 +61,16 @@ async fn main() -> anyhow::Result<()> {
     let opts = Opts::parse();
     tracing::info!(?opts);
 
+    let connector = HttpsConnectorBuilder::new()
+        .with_native_roots()?
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .build();
+    let client = hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build(connector);
+
     let state = Arc::new(State {
-        client: hyper_util::client::legacy::Client::builder(TokioExecutor::new())
-            .build(hyper_util::client::legacy::connect::HttpConnector::new()),
+        client,
         endpoints: opts
             .config
             .upstreams
@@ -105,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 type Client = hyper_util::client::legacy::Client<
-    hyper_util::client::legacy::connect::HttpConnector,
+    HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
     Full<Bytes>,
 >;
 
