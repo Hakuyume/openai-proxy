@@ -133,9 +133,14 @@ impl Endpoint {
             let mut parts_a = self.uri.clone().into_parts();
             let parts_b = parts.uri.into_parts();
             parts_a.path_and_query = match (parts_a.path_and_query, parts_b.path_and_query) {
-                (Some(path_and_query_a), Some(path_and_query_b)) => {
-                    Some(format!("{}{}", path_and_query_a.path(), path_and_query_b).parse()?)
-                }
+                (Some(path_and_query_a), Some(path_and_query_b)) => Some(
+                    format!(
+                        "{}{}",
+                        path_and_query_a.path().trim_end_matches('/'),
+                        path_and_query_b,
+                    )
+                    .parse()?,
+                ),
                 (path_and_query_a, None) => path_and_query_a,
                 (None, path_and_query_b) => path_and_query_b,
             };
