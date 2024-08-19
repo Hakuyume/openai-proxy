@@ -4,41 +4,53 @@ use axum::{extract, routing, Json, Router};
 use bytes::Bytes;
 use clap::Parser;
 use futures::TryFutureExt;
+use headers::authorization::Bearer;
+use headers::{Authorization, HeaderMapExt};
 use http::header::HOST;
-use http::uri::{self, InvalidUriParts, PathAndQuery};
 use http::{request, Request, Response, StatusCode, Uri};
-use http_body_util::{BodyExt, Full};
+use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper_util::rt::TokioExecutor;
 use serde::{Deserialize, Serialize};
-use std::convert;
 use std::fmt::Display;
-use std::future;
-use std::mem;
-use std::net::Ipv4Addr;
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::{env, future};
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::RwLock;
-use tokio::time;
 use tower_http::trace::TraceLayer;
-use tracing::Instrument;
 
 #[derive(Debug, Parser)]
 struct Opts {
     #[clap(long)]
-    port: u16,
-    #[clap(long = "endpoint", num_args = 1..)]
-    endpoints: Vec<Endpoint>,
+    config: Config,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct Endpoint {
+struct Config {
+    bind: SocketAddr,
+    upstreams: Vec<Upstream>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct Upstream {
     #[serde(with = "http_serde::uri")]
     uri: Uri,
-    #[serde(with = "humantime_serde")]
-    interval: Duration,
+    api_key: Option<ApiKey>,
+    models: Vec<Model>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ApiKey {
+    Env(String),
+}
+
+impl FromStr for Config {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s).map_err(|e| e.to_string())
+    }
 }
 
 #[tokio::main]
@@ -52,13 +64,23 @@ async fn main() -> anyhow::Result<()> {
         client: hyper_util::client::legacy::Client::builder(TokioExecutor::new())
             .build(hyper_util::client::legacy::connect::HttpConnector::new()),
         endpoints: opts
-            .endpoints
+            .config
+            .upstreams
             .into_iter()
-            .map(|endpoint| (endpoint, RwLock::new(None)))
-            .collect(),
+            .map(|upstream| {
+                Ok((
+                    Endpoint {
+                        uri: upstream.uri,
+                        authorization: match upstream.api_key {
+                            Some(ApiKey::Env(key)) => Some(Authorization::bearer(&env::var(key)?)?),
+                            None => None,
+                        },
+                    },
+                    upstream.models,
+                ))
+            })
+            .collect::<anyhow::Result<_>>()?,
     });
-
-    tokio::spawn(watch(state.clone()));
 
     let app = Router::new()
         .route("/health", routing::get(|| future::ready(())))
@@ -69,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state)
         .layer(TraceLayer::new_for_http());
 
-    let listener = tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, opts.port)).await?;
+    let listener = tokio::net::TcpListener::bind(opts.config.bind).await?;
     axum::serve(listener, app)
         .with_graceful_shutdown({
             let mut sigterm = signal(SignalKind::terminate())?;
@@ -82,67 +104,41 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-impl FromStr for Endpoint {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        serde_json::from_str(s).map_err(|e| e.to_string())
-    }
-}
-
-impl Endpoint {
-    fn uri(&self, path_and_query: Option<PathAndQuery>) -> Result<Uri, InvalidUriParts> {
-        let uri::Parts {
-            scheme, authority, ..
-        } = self.uri.clone().into_parts();
-        let mut parts = uri::Parts::default();
-        parts.scheme = scheme;
-        parts.authority = authority;
-        parts.path_and_query = path_and_query;
-        Uri::from_parts(parts)
-    }
-}
-
 type Client = hyper_util::client::legacy::Client<
     hyper_util::client::legacy::connect::HttpConnector,
     Full<Bytes>,
 >;
-type Models = RwLock<Option<Vec<Model>>>;
+
 struct State {
     client: Client,
-    endpoints: Vec<(Endpoint, Models)>,
+    endpoints: Vec<(Endpoint, Vec<Model>)>,
 }
 
-async fn watch(state: Arc<State>) {
-    async fn v1_models(client: &Client, endpoint: &Endpoint) -> anyhow::Result<Vec<Model>> {
-        let request =
-            Request::get(endpoint.uri(Some("/v1/models".parse()?))?).body(Full::default())?;
-        let response = client.request(request).await?;
-        let (parts, body) = response.into_parts();
-        anyhow::ensure!(parts.status.is_success(), "status = {:?}", parts.status);
-        let body = body.collect().await?.to_bytes();
-        let List { data: models } = serde_json::from_slice(&body)?;
-        Ok(models)
-    }
+struct Endpoint {
+    uri: Uri,
+    authorization: Option<Authorization<Bearer>>,
+}
 
-    futures::future::join_all(state.endpoints.iter().map(|(endpoint, models)| {
-        async {
-            let mut interval = time::interval(endpoint.interval);
-            loop {
-                interval.tick().await;
-                let latest = v1_models(&state.client, endpoint)
-                    .inspect_ok(|models| tracing::info!(?models))
-                    .inspect_err(|e| tracing::error!(error = e.to_string()))
-                    .await;
-                *models.write().await = latest.ok();
-            }
+impl Endpoint {
+    fn map_parts(&self, mut parts: request::Parts) -> Result<request::Parts, http::Error> {
+        parts.uri = {
+            let mut parts_a = self.uri.clone().into_parts();
+            let parts_b = parts.uri.into_parts();
+            parts_a.path_and_query = match (parts_a.path_and_query, parts_b.path_and_query) {
+                (Some(path_and_query_a), Some(path_and_query_b)) => {
+                    Some(format!("{}{}", path_and_query_a.path(), path_and_query_b).parse()?)
+                }
+                (path_and_query_a, None) => path_and_query_a,
+                (None, path_and_query_b) => path_and_query_b,
+            };
+            Uri::from_parts(parts_a)?
+        };
+        parts.headers.remove(HOST);
+        if let Some(authorization) = self.authorization.clone() {
+            parts.headers.typed_insert(authorization);
         }
-        .instrument(tracing::info_span!(
-            "watch",
-            "endpoint.uri" = ?endpoint.uri,
-        ))
-    }))
-    .await;
+        Ok(parts)
+    }
 }
 
 fn error<M>(code: StatusCode, message: M) -> Response<Body>
@@ -169,23 +165,18 @@ where
 }
 
 async fn v1_models(extract::State(state): extract::State<Arc<State>>) -> Json<List<Model>> {
-    let models = futures::future::join_all(
-        state
-            .endpoints
-            .iter()
-            .map(|(_, models)| async { models.read().await.clone() }),
-    )
-    .await
-    .into_iter()
-    .flatten()
-    .flatten()
-    .collect();
+    let models = state
+        .endpoints
+        .iter()
+        .flat_map(|(_, models)| models)
+        .cloned()
+        .collect();
     Json(List { data: models })
 }
 
 async fn tunnel(
     extract::State(state): extract::State<Arc<State>>,
-    mut parts: request::Parts,
+    parts: request::Parts,
     body: Bytes,
 ) -> Result<Response<Incoming>, Response<Body>> {
     let model = {
@@ -201,26 +192,16 @@ async fn tunnel(
     tracing::info!(model);
 
     let model = &model;
-    let endpoint =
-        futures::future::join_all(state.endpoints.iter().map(|(endpoint, models)| async move {
-            models
-                .read()
-                .await
-                .iter()
-                .flatten()
-                .any(|m| &m.id == model)
-                .then_some(endpoint)
-        }))
-        .await
-        .into_iter()
-        .find_map(convert::identity)
-        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "no such model"))?;
+    let (endpoint, _) = state
+        .endpoints
+        .iter()
+        .find(|(_, models)| models.iter().any(|m| &m.id == model))
+        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "unknown model"))?;
 
-    parts.uri = endpoint
-        .uri(mem::take(&mut parts.uri).into_parts().path_and_query)
+    let parts = endpoint
+        .map_parts(parts)
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     tracing::info!(uri = ?parts.uri);
-    parts.headers.remove(HOST);
 
     let request = Request::from_parts(parts, Full::new(body));
     let response = state
