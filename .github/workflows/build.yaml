@@ -24,9 +24,8 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - run: cargo clippy -- --deny=warnings
+      - run: cargo clippy --locked -- --deny=warnings
   cargo-build:
     runs-on: ubuntu-latest
     steps:
@@ -39,10 +38,9 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: |
-          cargo build --release
+          cargo build --locked --release
       - uses: actions/upload-artifact@v4
         with:
           name: openai-proxy
