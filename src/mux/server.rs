@@ -80,8 +80,22 @@ impl Server {
             };
             Uri::from_parts(this)?
         };
-        parts.headers.remove(http::header::HOST);
-        tracing::info!(uri = ?parts.uri);
+        parts.version = http::Version::default();
+        parts.headers = parts
+            .headers
+            .into_iter()
+            .filter_map(|(name, value)| {
+                let name = name?;
+                [
+                    http::header::ACCEPT,
+                    http::header::CONTENT_LENGTH,
+                    http::header::CONTENT_TYPE,
+                ]
+                .contains(&name)
+                .then_some((name, value))
+            })
+            .collect();
+        tracing::info!(?parts);
 
         let request = http::Request::from_parts(parts, Full::new(body.into()));
         Ok(self.client.request(request).await?)
