@@ -5,7 +5,7 @@ use axum::{extract, routing, Json, Router};
 use bytes::Bytes;
 use clap::{ArgAction, Parser};
 use futures::TryFutureExt;
-use http::{StatusCode, Uri};
+use http::StatusCode;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
@@ -20,13 +20,14 @@ use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
 use tower_http::trace::TraceLayer;
 use tracing::Instrument;
+use url::Url;
 
 #[derive(Parser)]
 pub(super) struct Args {
     #[clap(long)]
     bind: SocketAddr,
     #[clap(long, action = ArgAction::Append)]
-    server: Vec<Uri>,
+    server: Vec<Url>,
     #[clap(long, value_parser = humantime::parse_duration)]
     interval: Duration,
 }
@@ -68,7 +69,7 @@ struct State {
 
 fn poll_servers(
     state: Arc<State>,
-    uris: Vec<Uri>,
+    uris: Vec<Url>,
     interval: Duration,
 ) -> anyhow::Result<impl Future<Output = Infallible>> {
     let (config, mut opts) = hickory_resolver::system_conf::read_system_conf()?;
@@ -84,7 +85,7 @@ fn poll_servers(
                 let resolver = &resolver;
                 async move {
                     let lookup_ip = async {
-                        if let Some(host) = uri.host() {
+                        if let Some(host) = uri.host_str() {
                             match resolver.lookup_ip(host).await {
                                 Ok(lookup_ip) => Some(lookup_ip),
                                 Err(e) => {
@@ -103,9 +104,7 @@ fn poll_servers(
                     .await;
 
                     futures::future::join_all(lookup_ip.map(|ip| async move {
-                        let mut server = server::Server::new(uri.clone(), ip)
-                            .inspect_err(|e| tracing::warn!(error = e.to_string()))
-                            .ok()?;
+                        let mut server = server::Server::new(uri.clone(), ip).ok()?;
                         server.fetch_models().await.ok()?;
                         Some(server)
                     }))
@@ -174,16 +173,15 @@ async fn tunnel(
     let servers = state.servers.read().unwrap().clone();
     let servers = servers
         .iter()
-        .filter(|server| server.models().iter().any(|m| m.id == model))
+        .filter(|server| server.models().iter().any(|Model { id, .. }| *id == model))
         .collect::<Vec<_>>();
     let server = servers
         .choose(&mut *state.rng.lock().unwrap())
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "unknown model"))?;
     tracing::info!(?server);
 
-    let request = http::Request::from_parts(parts, body);
     server
-        .request(request)
+        .request(http::Request::from_parts(parts, body))
         .map_err(|e| error(StatusCode::BAD_GATEWAY, e))
         .await
 }

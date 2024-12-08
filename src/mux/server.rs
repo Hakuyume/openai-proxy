@@ -1,16 +1,15 @@
 use bytes::Bytes;
-use http::Uri;
-use http_body_util::BodyExt;
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use std::convert::Infallible;
 use std::fmt;
 use std::future;
 use std::iter;
 use std::net::{IpAddr, SocketAddr};
 use std::task::{Context, Poll};
+use url::Url;
 
 pub(super) struct Server {
-    uri: Uri,
+    uri: Url,
     ip: IpAddr,
     client: Client,
     models: Vec<super::Model>,
@@ -19,7 +18,7 @@ pub(super) struct Server {
 impl fmt::Debug for Server {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Server")
-            .field("uri", &self.uri)
+            .field("uri", &self.uri.as_str())
             .field("ip", &self.ip)
             .field(
                 "models",
@@ -34,7 +33,18 @@ impl fmt::Debug for Server {
 }
 
 impl Server {
-    pub(super) fn new(uri: Uri, ip: IpAddr) -> anyhow::Result<Self> {
+    #[tracing::instrument(err(level = tracing::Level::WARN), fields(uri = uri.as_str()))]
+    pub(super) fn new(mut uri: Url, ip: IpAddr) -> anyhow::Result<Self> {
+        let mut http2_only = false;
+        for (key, value) in uri.query_pairs() {
+            match &*key {
+                "http2_only" => http2_only = value.parse()?,
+                _ => anyhow::bail!("unknown option"),
+            }
+        }
+        uri.set_query(None);
+        uri.set_fragment(None);
+
         let mut connector =
             hyper_util::client::legacy::connect::HttpConnector::new_with_resolver(Resolver(ip));
         connector.enforce_http(false);
@@ -46,6 +56,7 @@ impl Server {
             .wrap_connector(connector);
         let client =
             hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+                .http2_only(http2_only)
                 .build(connector);
 
         Ok(Self {
@@ -60,50 +71,64 @@ impl Server {
         &self.models
     }
 
-    pub(super) async fn request<B>(
+    pub(super) async fn request(
         &self,
-        request: http::Request<B>,
-    ) -> anyhow::Result<http::Response<hyper::body::Incoming>>
-    where
-        B: Into<Bytes>,
-    {
-        let (mut parts, body) = request.into_parts();
-        parts.uri = {
-            let mut this = self.uri.clone().into_parts();
-            let other = parts.uri.into_parts();
-            this.path_and_query = match (this.path_and_query, other.path_and_query) {
-                (Some(this), Some(other)) => {
-                    Some(format!("{}{}", this.path().trim_end_matches('/'), other,).parse()?)
-                }
-                (this, None) => this,
-                (None, other) => other,
-            };
-            Uri::from_parts(this)?
+        request: http::Request<Bytes>,
+    ) -> anyhow::Result<http::Response<hyper::body::Incoming>> {
+        let request = {
+            let (parts, body) = request.into_parts();
+            let mut uri = self.uri.clone();
+            if let Ok(mut path_segments) = uri.path_segments_mut() {
+                path_segments
+                    .pop_if_empty()
+                    .extend(parts.uri.path().split('/').skip(1));
+            }
+            uri.set_query(parts.uri.query());
+            let builder = http::Request::builder()
+                .method(parts.method)
+                .uri(uri.as_str());
+            let builder = parts
+                .headers
+                .into_iter()
+                .filter_map(|(name, value)| {
+                    let name = name?;
+                    [http::header::CONTENT_LENGTH, http::header::CONTENT_TYPE]
+                        .contains(&name)
+                        .then_some((name, value))
+                })
+                .fold(builder, |builder, (name, value)| {
+                    builder.header(name, value)
+                });
+            builder.body(Full::new(body))?
         };
-        parts.version = http::Version::default();
-        parts.headers = parts
-            .headers
-            .into_iter()
-            .filter_map(|(name, value)| {
-                let name = name?;
-                [
-                    http::header::ACCEPT,
-                    http::header::CONTENT_LENGTH,
-                    http::header::CONTENT_TYPE,
-                ]
-                .contains(&name)
-                .then_some((name, value))
-            })
-            .collect();
-        tracing::info!(?parts);
+        tracing::info!(method = ?request.method(), uri = ?request.uri(), headers = ?request.headers());
 
-        let request = http::Request::from_parts(parts, Full::new(body.into()));
-        Ok(self.client.request(request).await?)
+        let response = self.client.request(request).await?;
+
+        let response = {
+            let (parts, body) = response.into_parts();
+            let builder = http::Response::builder().status(parts.status);
+            let builder = parts
+                .headers
+                .into_iter()
+                .filter_map(|(name, value)| {
+                    let name = name?;
+                    [http::header::CONTENT_LENGTH, http::header::CONTENT_TYPE]
+                        .contains(&name)
+                        .then_some((name, value))
+                })
+                .fold(builder, |builder, (name, value)| {
+                    builder.header(name, value)
+                });
+            builder.body(body)?
+        };
+
+        Ok(response)
     }
 
-    #[tracing::instrument(err(level = tracing::Level::WARN), fields(uri = ?self.uri, ip = ?self.ip), skip_all)]
+    #[tracing::instrument(err(level = tracing::Level::WARN))]
     pub(super) async fn fetch_models(&mut self) -> anyhow::Result<()> {
-        let request = http::Request::get("http://example/v1/models").body(Bytes::new())?;
+        let request = http::Request::get("/v1/models").body(Bytes::new())?;
         let response = self.request(request).await?;
 
         let (parts, body) = response.into_parts();
