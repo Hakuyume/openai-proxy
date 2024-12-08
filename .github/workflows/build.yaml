@@ -59,11 +59,9 @@ jobs:
         with:
           name: openai-proxy
       - run: |
-          chmod +x openai-proxy
-
           cat << 'EOD' > Dockerfile
           FROM alpine
-          COPY openai-proxy /usr/local/bin/
+          COPY --chmod=755 openai-proxy /usr/local/bin/
           ENTRYPOINT ["/usr/local/bin/openai-proxy"]
           EOD
       - uses: docker/login-action@v3

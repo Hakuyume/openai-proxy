@@ -41,13 +41,13 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
     tokio::spawn(poll_backends(state.clone(), args.backend, args.interval)?);
 
     let app = Router::new()
-        .route("/health", routing::get(|| future::ready(())))
         .route("/v1/models", routing::get(v1_models))
         .route("/v1/chat/completions", routing::post(tunnel))
         .route("/v1/completions", routing::post(tunnel))
         .route("/v1/embeddings", routing::post(tunnel))
         .with_state(state.clone())
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+        .route("/health", routing::get(|| future::ready(())));
 
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     axum::serve(listener, app)
