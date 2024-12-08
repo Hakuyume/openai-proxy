@@ -1,4 +1,4 @@
-mod server;
+mod backend;
 
 use axum::response::IntoResponse;
 use axum::{extract, routing, Json, Router};
@@ -27,7 +27,7 @@ pub(super) struct Args {
     #[clap(long)]
     bind: SocketAddr,
     #[clap(long, action = ArgAction::Append)]
-    server: Vec<Url>,
+    backend: Vec<Url>,
     #[clap(long, value_parser = humantime::parse_duration)]
     interval: Duration,
 }
@@ -35,10 +35,10 @@ pub(super) struct Args {
 pub(super) async fn main(args: Args) -> anyhow::Result<()> {
     let state = Arc::new(State {
         rng: Mutex::new(StdRng::from_entropy()),
-        servers: RwLock::default(),
+        backends: RwLock::default(),
     });
 
-    tokio::spawn(poll_servers(state.clone(), args.server, args.interval)?);
+    tokio::spawn(poll_backends(state.clone(), args.backend, args.interval)?);
 
     let app = Router::new()
         .route("/health", routing::get(|| future::ready(())))
@@ -64,10 +64,10 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
 
 struct State {
     rng: Mutex<StdRng>,
-    servers: RwLock<Arc<[server::Server]>>,
+    backends: RwLock<Arc<[backend::Backend]>>,
 }
 
-fn poll_servers(
+fn poll_backends(
     state: Arc<State>,
     uris: Vec<Url>,
     interval: Duration,
@@ -81,7 +81,7 @@ fn poll_servers(
     Ok(async move {
         loop {
             interval.tick().await;
-            let servers = futures::future::join_all(uris.iter().map(|uri| {
+            let backends = futures::future::join_all(uris.iter().map(|uri| {
                 let resolver = &resolver;
                 async move {
                     let lookup_ip = async {
@@ -104,9 +104,9 @@ fn poll_servers(
                     .await;
 
                     futures::future::join_all(lookup_ip.map(|ip| async move {
-                        let mut server = server::Server::new(uri.clone(), ip).ok()?;
-                        server.fetch_models().await.ok()?;
-                        Some(server)
+                        let mut backend = backend::Backend::new(uri.clone(), ip).ok()?;
+                        backend.fetch_models().await.ok()?;
+                        Some(backend)
                     }))
                     .await
                 }
@@ -116,17 +116,17 @@ fn poll_servers(
             .flatten()
             .flatten()
             .collect();
-            tracing::info!(?servers);
-            *state.servers.write().unwrap() = servers;
+            tracing::info!(?backends);
+            *state.backends.write().unwrap() = backends;
         }
     })
 }
 
 async fn v1_models(extract::State(state): extract::State<Arc<State>>) -> Json<List<Model>> {
-    let servers = state.servers.read().unwrap().clone();
-    let models = servers
+    let backends = state.backends.read().unwrap().clone();
+    let models = backends
         .iter()
-        .flat_map(server::Server::models)
+        .flat_map(backend::Backend::models)
         .cloned()
         .collect();
     Json(List { data: models })
@@ -170,17 +170,17 @@ async fn tunnel(
     };
     tracing::info!(model);
 
-    let servers = state.servers.read().unwrap().clone();
-    let servers = servers
+    let backends = state.backends.read().unwrap().clone();
+    let backends = backends
         .iter()
-        .filter(|server| server.models().iter().any(|Model { id, .. }| *id == model))
+        .filter(|backend| backend.models().iter().any(|Model { id, .. }| *id == model))
         .collect::<Vec<_>>();
-    let server = servers
+    let backend = backends
         .choose(&mut *state.rng.lock().unwrap())
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "unknown model"))?;
-    tracing::info!(?server);
+    tracing::info!(?backend);
 
-    server
+    backend
         .request(http::Request::from_parts(parts, body))
         .map_err(|e| error(StatusCode::BAD_GATEWAY, e))
         .await
