@@ -8,16 +8,16 @@ use std::net::{IpAddr, SocketAddr};
 use std::task::{Context, Poll};
 use url::Url;
 
-pub(super) struct Server {
+pub(super) struct Backend {
     uri: Url,
     ip: IpAddr,
     client: Client,
     models: Vec<super::Model>,
 }
 
-impl fmt::Debug for Server {
+impl fmt::Debug for Backend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Server")
+        f.debug_struct("Backend")
             .field("uri", &self.uri.as_str())
             .field("ip", &self.ip)
             .field(
@@ -32,7 +32,7 @@ impl fmt::Debug for Server {
     }
 }
 
-impl Server {
+impl Backend {
     #[tracing::instrument(err(level = tracing::Level::WARN), fields(uri = uri.as_str()))]
     pub(super) fn new(mut uri: Url, ip: IpAddr) -> anyhow::Result<Self> {
         let mut http2_only = false;
