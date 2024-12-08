@@ -46,7 +46,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: openai-proxy
-          path: target/release/openai-proxy
+          path: target/x86_64-unknown-linux-musl/release/openai-proxy
   docker:
     if: github.ref == 'refs/heads/main'
     needs:
