@@ -40,7 +40,9 @@ jobs:
             ~/.cargo/git/db/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: |
-          cargo build --locked --release
+          sudo apt-get install --no-install-recommends --yes musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --locked --release --target=x86_64-unknown-linux-musl
       - uses: actions/upload-artifact@v4
         with:
           name: openai-proxy
@@ -60,7 +62,7 @@ jobs:
           chmod +x openai-proxy
 
           cat << 'EOD' > Dockerfile
-          FROM debian:bookworm-slim
+          FROM alpine
           COPY openai-proxy /usr/local/bin/
           ENTRYPOINT ["/usr/local/bin/openai-proxy"]
           EOD
