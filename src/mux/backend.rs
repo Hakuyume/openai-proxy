@@ -32,6 +32,7 @@ impl FromStr for Config {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct Query {
             #[serde(default)]
             http2_only: bool,
@@ -57,7 +58,7 @@ impl FromStr for Config {
 }
 
 pub(super) struct Backend {
-    pool: super::client::Pool,
+    client: super::client::Client<Full<Bytes>>,
     config: Config,
     ip: IpAddr,
     models: Vec<super::Model>,
@@ -75,7 +76,7 @@ impl fmt::Debug for Backend {
 pub(super) type Backends = Arc<RwLock<Arc<[Backend]>>>;
 pub(super) fn watch(
     resolver: hickory_resolver::TokioAsyncResolver,
-    pool: super::client::Pool,
+    client: super::client::Client<Full<Bytes>>,
     config: Config,
 ) -> (impl Future<Output = Infallible>, Backends) {
     let backends = Backends::default();
@@ -106,7 +107,7 @@ pub(super) fn watch(
                 let next = {
                     let mut backends = lookup_ip
                         .map(|ip| Backend {
-                            pool: pool.clone(),
+                            client: client.clone(),
                             config: config.clone(),
                             ip,
                             models: Vec::new(),
@@ -138,8 +139,14 @@ impl Backend {
 
     pub(super) async fn request(
         &self,
-        request: http::Request<Bytes>,
+        request: http::Request<Full<Bytes>>,
     ) -> anyhow::Result<http::Response<hyper::body::Incoming>> {
+        const HEADER_DENYLIST: &[http::HeaderName] = &[
+            http::header::CONNECTION,
+            http::header::HOST,
+            http::header::UPGRADE,
+        ];
+
         let request = {
             let (parts, body) = request.into_parts();
             let mut uri = self.config.uri.clone();
@@ -157,21 +164,24 @@ impl Backend {
                 .into_iter()
                 .filter_map(|(name, value)| {
                     let name = name?;
-                    [http::header::CONTENT_LENGTH, http::header::CONTENT_TYPE]
-                        .contains(&name)
-                        .then_some((name, value))
+                    (!HEADER_DENYLIST.contains(&name)).then_some((name, value))
                 })
                 .fold(builder, |builder, (name, value)| {
                     builder.header(name, value)
                 });
-            builder.body(Full::new(body))?
+            builder.body(body)?
         };
         tracing::info!(method = ?request.method(), uri = ?request.uri(), headers = ?request.headers());
 
         let response = self
-            .pool
-            .get(self.ip, self.config.http2_only)
-            .request(request)
+            .client
+            .request(
+                request,
+                &super::client::Options {
+                    ip: self.ip,
+                    http2_only: self.config.http2_only,
+                },
+            )
             .await?;
 
         let response = {
@@ -182,9 +192,7 @@ impl Backend {
                 .into_iter()
                 .filter_map(|(name, value)| {
                     let name = name?;
-                    [http::header::CONTENT_LENGTH, http::header::CONTENT_TYPE]
-                        .contains(&name)
-                        .then_some((name, value))
+                    (!HEADER_DENYLIST.contains(&name)).then_some((name, value))
                 })
                 .fold(builder, |builder, (name, value)| {
                     builder.header(name, value)
@@ -197,7 +205,7 @@ impl Backend {
 
     #[tracing::instrument(err(level = tracing::Level::WARN))]
     async fn fetch_models(&mut self) -> anyhow::Result<()> {
-        let request = http::Request::get("/v1/models").body(Bytes::new())?;
+        let request = http::Request::get("/v1/models").body(Full::default())?;
         let response = self.request(request).await?;
 
         let (parts, body) = response.into_parts();

@@ -7,6 +7,7 @@ use bytes::Bytes;
 use clap::{ArgAction, Parser};
 use futures::TryFutureExt;
 use http::StatusCode;
+use http_body_util::Full;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
@@ -34,19 +35,12 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
     opts.try_tcp_on_error = true;
     let resolver = hickory_resolver::TokioAsyncResolver::tokio(config, opts);
 
-    let pool = client::Pool::new(
-        args.backend
-            .iter()
-            .map(|config| config.interval)
-            .max()
-            .unwrap_or_default()
-            * 2,
-    )?;
+    let client = client::Client::new()?;
 
     let (fs, backends) = args
         .backend
         .into_iter()
-        .map(|config| backend::watch(resolver.clone(), pool.clone(), config))
+        .map(|config| backend::watch(resolver.clone(), client.clone(), config))
         .unzip::<_, _, Vec<_>, _>();
     tokio::spawn(futures::future::join_all(fs));
 
@@ -152,7 +146,7 @@ async fn tunnel(
     tracing::info!(candidates = backends.len(), ?backend);
 
     backend
-        .request(http::Request::from_parts(parts, body))
+        .request(http::Request::from_parts(parts, Full::new(body)))
         .map_err(|e| error(StatusCode::BAD_GATEWAY, e))
         .await
 }
