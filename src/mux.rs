@@ -96,7 +96,7 @@ async fn v1_models(extract::State(state): extract::State<Arc<State>>) -> Json<Li
     let models = backends
         .iter()
         .flat_map(Deref::deref)
-        .flat_map(|backend| backend.models())
+        .flat_map(backend::Backend::models)
         .cloned()
         .collect();
     Json(List { data: models })
