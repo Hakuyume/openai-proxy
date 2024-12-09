@@ -142,6 +142,7 @@ impl Backend {
         request: http::Request<Full<Bytes>>,
     ) -> anyhow::Result<http::Response<hyper::body::Incoming>> {
         const HEADER_DENYLIST: &[http::HeaderName] = &[
+            http::header::AUTHORIZATION,
             http::header::CONNECTION,
             http::header::HOST,
             http::header::UPGRADE,
