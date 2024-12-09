@@ -1,4 +1,5 @@
 mod backend;
+mod client;
 
 use axum::response::IntoResponse;
 use axum::{extract, routing, Json, Router};
@@ -10,35 +11,49 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
-use std::convert::Infallible;
 use std::fmt;
 use std::future;
-use std::future::Future;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::ops::Deref;
+use std::sync::{Arc, Mutex};
 use tokio::signal::unix::{signal, SignalKind};
 use tower_http::trace::TraceLayer;
-use tracing::Instrument;
-use url::Url;
 
 #[derive(Parser)]
 pub(super) struct Args {
     #[clap(long)]
     bind: SocketAddr,
     #[clap(long, action = ArgAction::Append)]
-    backend: Vec<Url>,
-    #[clap(long, value_parser = humantime::parse_duration)]
-    interval: Duration,
+    backend: Vec<backend::Config>,
 }
 
 pub(super) async fn main(args: Args) -> anyhow::Result<()> {
+    let (config, mut opts) = hickory_resolver::system_conf::read_system_conf()?;
+    opts.ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
+    opts.cache_size = 0;
+    opts.try_tcp_on_error = true;
+    let resolver = hickory_resolver::TokioAsyncResolver::tokio(config, opts);
+
+    let pool = client::Pool::new(
+        args.backend
+            .iter()
+            .map(|config| config.interval)
+            .max()
+            .unwrap_or_default()
+            * 2,
+    )?;
+
+    let (fs, backends) = args
+        .backend
+        .into_iter()
+        .map(|config| backend::watch(resolver.clone(), pool.clone(), config))
+        .unzip::<_, _, Vec<_>, _>();
+    tokio::spawn(futures::future::join_all(fs));
+
     let state = Arc::new(State {
         rng: Mutex::new(StdRng::from_entropy()),
-        backends: RwLock::default(),
+        backends,
     });
-
-    tokio::spawn(poll_backends(state.clone(), args.backend, args.interval)?);
 
     let app = Router::new()
         .route("/v1/models", routing::get(v1_models))
@@ -64,69 +79,24 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
 
 struct State {
     rng: Mutex<StdRng>,
-    backends: RwLock<Arc<[backend::Backend]>>,
+    backends: Vec<backend::Backends>,
 }
 
-fn poll_backends(
-    state: Arc<State>,
-    uris: Vec<Url>,
-    interval: Duration,
-) -> anyhow::Result<impl Future<Output = Infallible>> {
-    let (config, mut opts) = hickory_resolver::system_conf::read_system_conf()?;
-    opts.ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
-    opts.cache_size = 0;
-    opts.try_tcp_on_error = true;
-    let resolver = hickory_resolver::TokioAsyncResolver::tokio(config, opts);
-    let mut interval = tokio::time::interval(interval);
-    Ok(async move {
-        loop {
-            interval.tick().await;
-            let backends = futures::future::join_all(uris.iter().map(|uri| {
-                let resolver = &resolver;
-                async move {
-                    let lookup_ip = async {
-                        if let Some(host) = uri.host_str() {
-                            match resolver.lookup_ip(host).await {
-                                Ok(lookup_ip) => Some(lookup_ip),
-                                Err(e) => {
-                                    tracing::warn!(error = e.to_string());
-                                    None
-                                }
-                            }
-                        } else {
-                            tracing::warn!("missing host");
-                            None
-                        }
-                        .into_iter()
-                        .flatten()
-                    }
-                    .instrument(tracing::info_span!("resolve", ?uri))
-                    .await;
-
-                    futures::future::join_all(lookup_ip.map(|ip| async move {
-                        let mut backend = backend::Backend::new(uri.clone(), ip).ok()?;
-                        backend.fetch_models().await.ok()?;
-                        Some(backend)
-                    }))
-                    .await
-                }
-            }))
-            .await
-            .into_iter()
-            .flatten()
-            .flatten()
-            .collect();
-            tracing::info!(?backends);
-            *state.backends.write().unwrap() = backends;
-        }
-    })
+impl State {
+    fn backends(&self) -> Vec<Arc<[backend::Backend]>> {
+        self.backends
+            .iter()
+            .filter_map(|backends| Some(backends.read().ok()?.clone()))
+            .collect()
+    }
 }
 
 async fn v1_models(extract::State(state): extract::State<Arc<State>>) -> Json<List<Model>> {
-    let backends = state.backends.read().unwrap().clone();
+    let backends = state.backends();
     let models = backends
         .iter()
-        .flat_map(backend::Backend::models)
+        .flat_map(Deref::deref)
+        .flat_map(|backend| backend.models())
         .cloned()
         .collect();
     Json(List { data: models })
@@ -170,15 +140,16 @@ async fn tunnel(
     };
     tracing::info!(model);
 
-    let backends = state.backends.read().unwrap().clone();
+    let backends = state.backends();
     let backends = backends
         .iter()
+        .flat_map(Deref::deref)
         .filter(|backend| backend.models().iter().any(|Model { id, .. }| *id == model))
         .collect::<Vec<_>>();
     let backend = backends
         .choose(&mut *state.rng.lock().unwrap())
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "unknown model"))?;
-    tracing::info!(?backend);
+    tracing::info!(candidates = backends.len(), ?backend);
 
     backend
         .request(http::Request::from_parts(parts, body))

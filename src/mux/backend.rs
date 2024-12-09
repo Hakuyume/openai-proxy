@@ -1,73 +1,138 @@
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
+use serde::Deserialize;
 use std::convert::Infallible;
 use std::fmt;
-use std::future;
-use std::iter;
-use std::net::{IpAddr, SocketAddr};
-use std::task::{Context, Poll};
+use std::future::Future;
+use std::net::IpAddr;
+use std::str::FromStr;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+use tracing::Instrument;
 use url::Url;
 
+#[derive(Clone)]
+pub(super) struct Config {
+    pub(super) uri: Url,
+    pub(super) http2_only: bool,
+    pub(super) interval: Duration,
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("uri", &self.uri.as_str())
+            .field("http2_only", &self.http2_only)
+            .field("interval", &self.interval)
+            .finish()
+    }
+}
+
+impl FromStr for Config {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        #[derive(Deserialize)]
+        struct Query {
+            #[serde(default)]
+            http2_only: bool,
+            #[serde(with = "humantime_serde")]
+            interval: Duration,
+        }
+
+        let mut uri = s.parse::<Url>().map_err(|e| e.to_string())?;
+        let Query {
+            http2_only,
+            interval,
+        } = serde_urlencoded::from_str(uri.query().unwrap_or_default())
+            .map_err(|e| e.to_string())?;
+        uri.set_query(None);
+        uri.set_fragment(None);
+
+        Ok(Self {
+            uri,
+            http2_only,
+            interval,
+        })
+    }
+}
+
 pub(super) struct Backend {
-    uri: Url,
+    pool: super::client::Pool,
+    config: Config,
     ip: IpAddr,
-    client: Client,
     models: Vec<super::Model>,
 }
 
 impl fmt::Debug for Backend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Backend")
-            .field("uri", &self.uri.as_str())
+            .field("uri", &self.config.uri.as_str())
             .field("ip", &self.ip)
-            .field(
-                "models",
-                &self
-                    .models
-                    .iter()
-                    .map(|model| &model.id)
-                    .collect::<Vec<_>>(),
-            )
             .finish()
     }
 }
 
-impl Backend {
-    #[tracing::instrument(err(level = tracing::Level::WARN), fields(uri = uri.as_str()))]
-    pub(super) fn new(mut uri: Url, ip: IpAddr) -> anyhow::Result<Self> {
-        let mut http2_only = false;
-        for (key, value) in uri.query_pairs() {
-            match &*key {
-                "http2_only" => http2_only = value.parse()?,
-                _ => anyhow::bail!("unknown option"),
+pub(super) type Backends = Arc<RwLock<Arc<[Backend]>>>;
+pub(super) fn watch(
+    resolver: hickory_resolver::TokioAsyncResolver,
+    pool: super::client::Pool,
+    config: Config,
+) -> (impl Future<Output = Infallible>, Backends) {
+    let backends = Backends::default();
+    let f = {
+        let span = tracing::info_span!("watch", uri = config.uri.as_str());
+        let backends = backends.clone();
+        let mut interval = tokio::time::interval(config.interval);
+        async move {
+            loop {
+                interval.tick().await;
+                let lookup_ip = {
+                    if let Some(host) = config.uri.host_str() {
+                        match resolver.lookup_ip(host).await {
+                            Ok(lookup_ip) => Some(lookup_ip),
+                            Err(e) => {
+                                tracing::warn!(error = e.to_string());
+                                None
+                            }
+                        }
+                    } else {
+                        tracing::warn!("missing host");
+                        None
+                    }
+                    .into_iter()
+                    .flatten()
+                };
+
+                let next = {
+                    let mut backends = lookup_ip
+                        .map(|ip| Backend {
+                            pool: pool.clone(),
+                            config: config.clone(),
+                            ip,
+                            models: Vec::new(),
+                        })
+                        .collect::<Box<[_]>>();
+                    futures::future::join_all(backends.iter_mut().map(Backend::fetch_models)).await;
+                    backends.into()
+                };
+
+                match backends.write() {
+                    Ok(mut backends) => *backends = next,
+                    Err(mut e) => {
+                        **e.get_mut() = next;
+                        backends.clear_poison();
+                    }
+                }
             }
         }
-        uri.set_query(None);
-        uri.set_fragment(None);
+        .instrument(span)
+    };
 
-        let mut connector =
-            hyper_util::client::legacy::connect::HttpConnector::new_with_resolver(Resolver(ip));
-        connector.enforce_http(false);
-        let connector = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_provider_and_webpki_roots(rustls::crypto::aws_lc_rs::default_provider())?
-            .https_or_http()
-            .enable_http1()
-            .enable_http2()
-            .wrap_connector(connector);
-        let client =
-            hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-                .http2_only(http2_only)
-                .build(connector);
+    (f, backends)
+}
 
-        Ok(Self {
-            uri,
-            ip,
-            client,
-            models: Vec::new(),
-        })
-    }
-
-    pub fn models(&self) -> &[super::Model] {
+impl Backend {
+    pub(super) fn models(&self) -> &[super::Model] {
         &self.models
     }
 
@@ -77,7 +142,7 @@ impl Backend {
     ) -> anyhow::Result<http::Response<hyper::body::Incoming>> {
         let request = {
             let (parts, body) = request.into_parts();
-            let mut uri = self.uri.clone();
+            let mut uri = self.config.uri.clone();
             if let Ok(mut path_segments) = uri.path_segments_mut() {
                 path_segments
                     .pop_if_empty()
@@ -103,7 +168,11 @@ impl Backend {
         };
         tracing::info!(method = ?request.method(), uri = ?request.uri(), headers = ?request.headers());
 
-        let response = self.client.request(request).await?;
+        let response = self
+            .pool
+            .get(self.ip, self.config.http2_only)
+            .request(request)
+            .await?;
 
         let response = {
             let (parts, body) = response.into_parts();
@@ -127,7 +196,7 @@ impl Backend {
     }
 
     #[tracing::instrument(err(level = tracing::Level::WARN))]
-    pub(super) async fn fetch_models(&mut self) -> anyhow::Result<()> {
+    async fn fetch_models(&mut self) -> anyhow::Result<()> {
         let request = http::Request::get("/v1/models").body(Bytes::new())?;
         let response = self.request(request).await?;
 
@@ -143,24 +212,5 @@ impl Backend {
                 body
             ))
         }
-    }
-}
-
-type Client = hyper_util::client::legacy::Client<
-    hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector<Resolver>>,
-    Full<Bytes>,
->;
-
-#[derive(Clone, Copy)]
-struct Resolver(IpAddr);
-impl tower::Service<hyper_util::client::legacy::connect::dns::Name> for Resolver {
-    type Response = iter::Once<SocketAddr>;
-    type Error = Infallible;
-    type Future = future::Ready<Result<Self::Response, Self::Error>>;
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-    fn call(&mut self, _: hyper_util::client::legacy::connect::dns::Name) -> Self::Future {
-        future::ready(Ok(iter::once((self.0, 0).into())))
     }
 }
