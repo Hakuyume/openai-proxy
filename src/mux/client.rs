@@ -1,6 +1,5 @@
 use hyper_rustls::ConfigBuilderExt;
 use std::convert::Infallible;
-use std::future;
 use std::iter;
 use std::net::IpAddr;
 use std::num::NonZeroUsize;
@@ -64,12 +63,11 @@ where
     }
 
     fn service(&self, options: &Options) -> Service<B> {
-        let mut connector = hyper_util::client::legacy::connect::HttpConnector::new_with_resolver(
-            tower::service_fn({
-                let ip = options.ip;
-                move |_| future::ready(Ok::<_, Infallible>(iter::once((ip, 0).into())))
-            }),
-        );
+        let mut connector =
+            hyper_util::client::legacy::connect::HttpConnector::new_with_resolver({
+                let f = futures::future::ok::<_, Infallible>(iter::once((options.ip, 0).into()));
+                tower::service_fn(move |_| f.clone())
+            });
         connector.enforce_http(false);
         let connector = hyper_rustls::HttpsConnectorBuilder::new()
             .with_tls_config(self.tls_config.clone())
