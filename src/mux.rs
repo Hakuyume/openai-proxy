@@ -1,6 +1,5 @@
 mod backend;
 mod client;
-mod metrics;
 
 use axum::response::IntoResponse;
 use axum::{extract, routing, Json, Router};
@@ -55,8 +54,6 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
         .route("/v1/chat/completions", routing::post(tunnel))
         .route("/v1/completions", routing::post(tunnel))
         .route("/v1/embeddings", routing::post(tunnel))
-        // https://github.com/vllm-project/vllm/tree/main/examples/production_monitoring
-        .route("/metrics", routing::get(metrics))
         .with_state(state.clone())
         .layer(TraceLayer::new_for_http())
         .route("/health", routing::get(|| future::ready(())));
@@ -166,29 +163,4 @@ struct Model {
     id: String,
     #[serde(flatten)]
     _extra: serde_json::Map<String, serde_json::Value>,
-}
-
-async fn metrics(
-    extract::State(state): extract::State<Arc<State>>,
-) -> ([(http::HeaderName, &'static str); 1], String) {
-    let backends = state.backends();
-    let expositions = futures::future::join_all(
-        backends
-            .iter()
-            .flat_map(Deref::deref)
-            .map(|backend| backend.metrics()),
-    )
-    .await;
-    let exposition = expositions
-        .into_iter()
-        .flat_map(Result::ok)
-        .flat_map(|exposition| exposition.0)
-        .collect::<metrics::Exposition>();
-    (
-        [(
-            http::header::CONTENT_TYPE,
-            "text/plain; version=0.0.4; charset=utf-8",
-        )],
-        exposition.to_string(),
-    )
 }

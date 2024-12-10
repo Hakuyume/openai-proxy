@@ -220,29 +220,6 @@ impl Backend {
         Ok(serde_json::from_slice(&body)?)
     }
 
-    #[tracing::instrument(err(level = tracing::Level::WARN))]
-    pub(super) async fn metrics(&self) -> anyhow::Result<super::metrics::Exposition> {
-        let body = self.get("/metrics").await?;
-        let body = str::from_utf8(&body)?;
-        let (_, metricset) = nom::combinator::complete(openmetrics_nom::metricset)(body)
-            .map_err(nom::Err::<(&str, _)>::to_owned)?;
-
-        let mut exposition = metricset
-            .metricfamily
-            .into_iter()
-            .flat_map(super::metrics::split_metricfamily)
-            .collect::<super::metrics::Exposition>();
-        for family in exposition.0.values_mut() {
-            for sample in &mut family.samples {
-                sample
-                    .labels
-                    .push(("uri".to_owned(), self.config.uri.to_string()));
-                sample.labels.push(("ip".to_owned(), self.ip.to_string()));
-            }
-        }
-        Ok(exposition)
-    }
-
     async fn get(&self, uri: &str) -> anyhow::Result<Bytes> {
         let request = http::Request::get(uri).body(Full::default())?;
         tokio::time::timeout(self.config.timeout.unwrap_or(Duration::MAX), async {
