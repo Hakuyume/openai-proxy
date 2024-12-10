@@ -182,7 +182,7 @@ async fn metrics(
     let exposition = expositions
         .into_iter()
         .flat_map(Result::ok)
-        .flatten()
+        .flat_map(|exposition| exposition.0)
         .collect::<metrics::Exposition>();
     (
         [(

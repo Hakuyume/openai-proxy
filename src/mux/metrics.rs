@@ -1,8 +1,8 @@
-use std::collections::{btree_map, BTreeMap};
+use std::collections::BTreeMap;
 use std::fmt;
 
 #[derive(Debug, Default)]
-pub(super) struct Exposition(BTreeMap<String, Family>);
+pub(super) struct Exposition(pub(super) BTreeMap<String, Family>);
 
 #[derive(Debug, Default)]
 pub(super) struct Family {
@@ -18,141 +18,6 @@ pub(super) struct Sample {
     pub(super) value: String,
     pub(super) timestamp: Option<String>,
     pub(super) exemplar: Option<String>,
-}
-
-impl Exposition {
-    pub(super) fn push_label<N, V>(&mut self, name: N, value: V)
-    where
-        N: fmt::Display,
-        V: fmt::Display,
-    {
-        for family in self.0.values_mut() {
-            for sample in &mut family.samples {
-                sample.labels.push((name.to_string(), value.to_string()));
-            }
-        }
-    }
-}
-
-impl From<openmetrics_nom::Metricset<&str>> for Exposition {
-    fn from(value: openmetrics_nom::Metricset<&str>) -> Self {
-        value
-            .metricfamily
-            .into_iter()
-            .flat_map(|metricfamily| {
-                let metric_descriptor =
-                    metricfamily
-                        .metric_descriptor
-                        .into_iter()
-                        .map(|metric_descriptor| match metric_descriptor {
-                            openmetrics_nom::MetricDescriptor::Type {
-                                consumed,
-                                metricname,
-                                ..
-                            } => (
-                                metricname.to_owned(),
-                                Family {
-                                    type_: Some(consumed.to_owned()),
-                                    ..Family::default()
-                                },
-                            ),
-                            openmetrics_nom::MetricDescriptor::Help {
-                                consumed,
-                                metricname,
-                                ..
-                            } => (
-                                metricname.to_owned(),
-                                Family {
-                                    help: Some(consumed.to_owned()),
-                                    ..Family::default()
-                                },
-                            ),
-                            openmetrics_nom::MetricDescriptor::Unit {
-                                consumed,
-                                metricname,
-                                ..
-                            } => (
-                                metricname.to_owned(),
-                                Family {
-                                    unit: Some(consumed.to_owned()),
-                                    ..Family::default()
-                                },
-                            ),
-                        });
-                let metric = metricfamily.metric.into_iter().map(|metric| {
-                    (
-                        metric.metricname.to_owned(),
-                        Family {
-                            samples: vec![Sample {
-                                labels: metric
-                                    .labels
-                                    .into_iter()
-                                    .flat_map(|labels| labels.labels)
-                                    .map(|label| {
-                                        (
-                                            label.label_name.to_owned(),
-                                            label.escaped_string.to_owned(),
-                                        )
-                                    })
-                                    .collect(),
-                                value: match metric.number {
-                                    openmetrics_nom::Number::Real(consumed)
-                                    | openmetrics_nom::Number::Inf(consumed)
-                                    | openmetrics_nom::Number::Nan(consumed) => consumed.to_owned(),
-                                },
-                                timestamp: metric.timestamp.map(ToOwned::to_owned),
-                                exemplar: metric
-                                    .exemplar
-                                    .map(|exemplar| exemplar.consumed.to_owned()),
-                            }],
-                            ..Family::default()
-                        },
-                    )
-                });
-                metric_descriptor.chain(metric)
-            })
-            .collect()
-    }
-}
-
-impl Extend<(String, Family)> for Exposition {
-    fn extend<T>(&mut self, iter: T)
-    where
-        T: IntoIterator<Item = (String, Family)>,
-    {
-        for (name, family) in iter {
-            let this = self.0.entry(name).or_default();
-            if let Some(type_) = family.type_ {
-                this.type_.get_or_insert(type_);
-            }
-            if let Some(help) = family.help {
-                this.help.get_or_insert(help);
-            }
-            if let Some(unit) = family.unit {
-                this.unit.get_or_insert(unit);
-            }
-            this.samples.extend(family.samples);
-        }
-    }
-}
-
-impl FromIterator<(String, Family)> for Exposition {
-    fn from_iter<T>(iter: T) -> Self
-    where
-        T: IntoIterator<Item = (String, Family)>,
-    {
-        let mut this = Self::default();
-        this.extend(iter);
-        this
-    }
-}
-
-impl IntoIterator for Exposition {
-    type Item = (String, Family);
-    type IntoIter = btree_map::IntoIter<String, Family>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
 }
 
 impl fmt::Display for Exposition {
@@ -199,4 +64,99 @@ impl fmt::Display for Exposition {
         openmetrics_nom::LF.fmt(f)?;
         Ok(())
     }
+}
+
+impl FromIterator<(String, Family)> for Exposition {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = (String, Family)>,
+    {
+        iter.into_iter()
+            .fold(Self::default(), |mut this, (name, family)| {
+                this.0.entry(name).or_default().insert(family);
+                this
+            })
+    }
+}
+
+impl Family {
+    fn insert(&mut self, other: Family) {
+        if let Some(type_) = other.type_ {
+            self.type_.get_or_insert(type_);
+        }
+        if let Some(help) = other.help {
+            self.help.get_or_insert(help);
+        }
+        if let Some(unit) = other.unit {
+            self.unit.get_or_insert(unit);
+        }
+        self.samples.extend(other.samples);
+    }
+}
+
+pub(super) fn split_metricfamily(
+    family: openmetrics_nom::Metricfamily<&str>,
+) -> impl Iterator<Item = (String, Family)> + '_ {
+    let metric_descriptor = family
+        .metric_descriptor
+        .into_iter()
+        .map(|metric_descriptor| match metric_descriptor {
+            openmetrics_nom::MetricDescriptor::Type {
+                consumed,
+                metricname,
+                ..
+            } => (
+                metricname.to_owned(),
+                Family {
+                    type_: Some(consumed.to_owned()),
+                    ..Family::default()
+                },
+            ),
+            openmetrics_nom::MetricDescriptor::Help {
+                consumed,
+                metricname,
+                ..
+            } => (
+                metricname.to_owned(),
+                Family {
+                    help: Some(consumed.to_owned()),
+                    ..Family::default()
+                },
+            ),
+            openmetrics_nom::MetricDescriptor::Unit {
+                consumed,
+                metricname,
+                ..
+            } => (
+                metricname.to_owned(),
+                Family {
+                    unit: Some(consumed.to_owned()),
+                    ..Family::default()
+                },
+            ),
+        });
+    let metric = family.metric.into_iter().map(|metric| {
+        (
+            metric.metricname.to_owned(),
+            Family {
+                samples: vec![Sample {
+                    labels: metric
+                        .labels
+                        .into_iter()
+                        .flat_map(|labels| labels.labels)
+                        .map(|label| (label.label_name.to_owned(), label.escaped_string.to_owned()))
+                        .collect(),
+                    value: match metric.number {
+                        openmetrics_nom::Number::Real(consumed)
+                        | openmetrics_nom::Number::Inf(consumed)
+                        | openmetrics_nom::Number::Nan(consumed) => consumed.to_owned(),
+                    },
+                    timestamp: metric.timestamp.map(ToOwned::to_owned),
+                    exemplar: metric.exemplar.map(|exemplar| exemplar.consumed.to_owned()),
+                }],
+                ..Family::default()
+            },
+        )
+    });
+    metric_descriptor.chain(metric)
 }
