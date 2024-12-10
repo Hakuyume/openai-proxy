@@ -219,7 +219,7 @@ impl Backend {
 
     #[tracing::instrument(err(level = tracing::Level::WARN))]
     pub(super) async fn metrics(&self) -> anyhow::Result<super::metrics::Exposition> {
-        let request = http::Request::get("/metrics/").body(Full::default())?;
+        let request = http::Request::get("/metrics").body(Full::default())?;
         let response = self.request(request).await?;
         let body = check_response(response).await?;
         let body = str::from_utf8(&body)?;

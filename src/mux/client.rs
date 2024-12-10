@@ -26,7 +26,7 @@ type Service<B> = tower::util::BoxCloneService<
 
 impl<B> Client<B>
 where
-    B: http_body::Body + Send + Unpin + 'static,
+    B: Default + http_body::Body + Send + Unpin + 'static,
     B::Data: Send,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
@@ -75,9 +75,15 @@ where
             .enable_http1()
             .enable_http2()
             .wrap_connector(connector);
-        hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-            .http2_only(options.http2_only)
-            .build(connector)
-            .boxed_clone()
+        let service =
+            hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+                .http2_only(options.http2_only)
+                .build(connector);
+
+        let service = tower::ServiceBuilder::new()
+            .layer(tower_http::follow_redirect::FollowRedirectLayer::new())
+            .service(service);
+
+        service.boxed_clone()
     }
 }

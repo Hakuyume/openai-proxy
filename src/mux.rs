@@ -56,7 +56,7 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
         .route("/v1/completions", routing::post(tunnel))
         .route("/v1/embeddings", routing::post(tunnel))
         // https://github.com/vllm-project/vllm/tree/main/examples/production_monitoring
-        .route("/metrics/", routing::get(metrics))
+        .route("/metrics", routing::get(metrics))
         .with_state(state.clone())
         .layer(TraceLayer::new_for_http())
         .route("/health", routing::get(|| future::ready(())));
