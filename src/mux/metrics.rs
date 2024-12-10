@@ -42,7 +42,9 @@ impl fmt::Display for Exposition {
                         }
                         name.fmt(f)?;
                         openmetrics_nom::EQ.fmt(f)?;
+                        openmetrics_nom::DQUOTE.fmt(f)?;
                         value.fmt(f)?;
+                        openmetrics_nom::DQUOTE.fmt(f)?;
                     }
                     '}'.fmt(f)?;
                 }
