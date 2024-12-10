@@ -5,7 +5,7 @@ use std::convert::Infallible;
 use std::fmt;
 use std::future::Future;
 use std::net::IpAddr;
-use std::str::FromStr;
+use std::str::{self, FromStr};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tracing::Instrument;
@@ -16,6 +16,7 @@ pub(super) struct Config {
     pub(super) uri: Url,
     pub(super) http2_only: bool,
     pub(super) interval: Duration,
+    pub(super) timeout: Option<Duration>,
 }
 
 impl fmt::Debug for Config {
@@ -38,12 +39,15 @@ impl FromStr for Config {
             http2_only: bool,
             #[serde(with = "humantime_serde")]
             interval: Duration,
+            #[serde(default, with = "humantime_serde")]
+            timeout: Option<Duration>,
         }
 
         let mut uri = s.parse::<Url>().map_err(|e| e.to_string())?;
         let Query {
             http2_only,
             interval,
+            timeout,
         } = serde_urlencoded::from_str(uri.query().unwrap_or_default())
             .map_err(|e| e.to_string())?;
         uri.set_query(None);
@@ -53,6 +57,7 @@ impl FromStr for Config {
             uri,
             http2_only,
             interval,
+            timeout,
         })
     }
 }
@@ -113,7 +118,12 @@ pub(super) fn watch(
                             models: Vec::new(),
                         })
                         .collect::<Box<[_]>>();
-                    futures::future::join_all(backends.iter_mut().map(Backend::fetch_models)).await;
+                    futures::future::join_all(backends.iter_mut().map(|backend| async move {
+                        if let Ok(models) = backend.v1_models().await {
+                            backend.models = models.data;
+                        }
+                    }))
+                    .await;
                     backends.into()
                 };
 
@@ -205,21 +215,50 @@ impl Backend {
     }
 
     #[tracing::instrument(err(level = tracing::Level::WARN))]
-    async fn fetch_models(&mut self) -> anyhow::Result<()> {
-        let request = http::Request::get("/v1/models").body(Full::default())?;
-        let response = self.request(request).await?;
+    pub(super) async fn v1_models(&self) -> anyhow::Result<super::List<super::Model>> {
+        let body = self.get("/v1/models").await?;
+        Ok(serde_json::from_slice(&body)?)
+    }
 
-        let (parts, body) = response.into_parts();
-        let body = body.collect().await?.to_bytes();
-        if parts.status.is_success() {
-            self.models = serde_json::from_slice::<super::List<_>>(&body)?.data;
-            Ok(())
-        } else {
-            Err(anyhow::format_err!(
-                "status = {:?}, body = {:?}",
-                parts.status,
-                body
-            ))
+    #[tracing::instrument(err(level = tracing::Level::WARN))]
+    pub(super) async fn metrics(&self) -> anyhow::Result<super::metrics::Exposition> {
+        let body = self.get("/metrics").await?;
+        let body = str::from_utf8(&body)?;
+        let (_, metricset) = nom::combinator::complete(openmetrics_nom::metricset)(body)
+            .map_err(nom::Err::<(&str, _)>::to_owned)?;
+
+        let mut exposition = metricset
+            .metricfamily
+            .into_iter()
+            .flat_map(super::metrics::split_metricfamily)
+            .collect::<super::metrics::Exposition>();
+        for family in exposition.0.values_mut() {
+            for sample in &mut family.samples {
+                sample
+                    .labels
+                    .push(("uri".to_owned(), self.config.uri.to_string()));
+                sample.labels.push(("ip".to_owned(), self.ip.to_string()));
+            }
         }
+        Ok(exposition)
+    }
+
+    async fn get(&self, uri: &str) -> anyhow::Result<Bytes> {
+        let request = http::Request::get(uri).body(Full::default())?;
+        tokio::time::timeout(self.config.timeout.unwrap_or(Duration::MAX), async {
+            let response = self.request(request).await?;
+            let (parts, body) = response.into_parts();
+            let body = body.collect().await?.to_bytes();
+            if parts.status.is_success() {
+                Ok(body)
+            } else {
+                Err(anyhow::format_err!(
+                    "status = {:?}, body = {:?}",
+                    parts.status,
+                    body,
+                ))
+            }
+        })
+        .await?
     }
 }
