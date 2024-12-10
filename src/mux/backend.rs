@@ -5,7 +5,7 @@ use std::convert::Infallible;
 use std::fmt;
 use std::future::Future;
 use std::net::IpAddr;
-use std::str::FromStr;
+use std::str::{self, FromStr};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tracing::Instrument;
@@ -113,7 +113,12 @@ pub(super) fn watch(
                             models: Vec::new(),
                         })
                         .collect::<Box<[_]>>();
-                    futures::future::join_all(backends.iter_mut().map(Backend::fetch_models)).await;
+                    futures::future::join_all(backends.iter_mut().map(|backend| async move {
+                        if let Ok(models) = backend.v1_models().await {
+                            backend.models = models.data;
+                        }
+                    }))
+                    .await;
                     backends.into()
                 };
 
@@ -205,21 +210,41 @@ impl Backend {
     }
 
     #[tracing::instrument(err(level = tracing::Level::WARN))]
-    async fn fetch_models(&mut self) -> anyhow::Result<()> {
+    pub(super) async fn v1_models(&self) -> anyhow::Result<super::List<super::Model>> {
         let request = http::Request::get("/v1/models").body(Full::default())?;
         let response = self.request(request).await?;
+        let body = check_response(response).await?;
+        Ok(serde_json::from_slice(&body)?)
+    }
 
-        let (parts, body) = response.into_parts();
-        let body = body.collect().await?.to_bytes();
-        if parts.status.is_success() {
-            self.models = serde_json::from_slice::<super::List<_>>(&body)?.data;
-            Ok(())
-        } else {
-            Err(anyhow::format_err!(
-                "status = {:?}, body = {:?}",
-                parts.status,
-                body
-            ))
-        }
+    #[tracing::instrument(err(level = tracing::Level::WARN))]
+    pub(super) async fn metrics(&self) -> anyhow::Result<super::metrics::Exposition> {
+        let request = http::Request::get("/metrics/").body(Full::default())?;
+        let response = self.request(request).await?;
+        let body = check_response(response).await?;
+        let body = str::from_utf8(&body)?;
+        let (_, metricset) =
+            nom::combinator::complete::<_, _, _, _>(openmetrics_nom::metricset)(body)
+                .map_err(nom::Err::<(&str, _)>::to_owned)?;
+
+        let mut exposition = super::metrics::Exposition::from(metricset);
+        exposition.push_label("uri", &self.config.uri);
+        exposition.push_label("ip", self.ip);
+
+        Ok(exposition)
+    }
+}
+
+async fn check_response(response: http::Response<hyper::body::Incoming>) -> anyhow::Result<Bytes> {
+    let (parts, body) = response.into_parts();
+    let body = body.collect().await?.to_bytes();
+    if parts.status.is_success() {
+        Ok(body)
+    } else {
+        Err(anyhow::format_err!(
+            "status = {:?}, body = {:?}",
+            parts.status,
+            body
+        ))
     }
 }

@@ -1175,6 +1175,8 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "lru",
+ "nom",
+ "openmetrics-nom",
  "rand",
  "rustls",
  "serde",
@@ -1186,6 +1188,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "openmetrics-nom"
+version = "0.1.0"
+source = "git+https://github.com/Hakuyume/openmetrics-nom.git#beccc446f412ee2f1bd48a187062f5ce2151f248"
+dependencies = [
+ "nom",
 ]
 
 [[package]]
