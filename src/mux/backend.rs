@@ -39,7 +39,7 @@ impl FromStr for Config {
             http2_only: bool,
             #[serde(with = "humantime_serde")]
             interval: Duration,
-            #[serde(with = "humantime_serde")]
+            #[serde(default, with = "humantime_serde")]
             timeout: Option<Duration>,
         }
 
