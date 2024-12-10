@@ -16,6 +16,7 @@ pub(super) struct Config {
     pub(super) uri: Url,
     pub(super) http2_only: bool,
     pub(super) interval: Duration,
+    pub(super) timeout: Option<Duration>,
 }
 
 impl fmt::Debug for Config {
@@ -38,12 +39,15 @@ impl FromStr for Config {
             http2_only: bool,
             #[serde(with = "humantime_serde")]
             interval: Duration,
+            #[serde(with = "humantime_serde")]
+            timeout: Option<Duration>,
         }
 
         let mut uri = s.parse::<Url>().map_err(|e| e.to_string())?;
         let Query {
             http2_only,
             interval,
+            timeout,
         } = serde_urlencoded::from_str(uri.query().unwrap_or_default())
             .map_err(|e| e.to_string())?;
         uri.set_query(None);
@@ -53,6 +57,7 @@ impl FromStr for Config {
             uri,
             http2_only,
             interval,
+            timeout,
         })
     }
 }
@@ -211,17 +216,13 @@ impl Backend {
 
     #[tracing::instrument(err(level = tracing::Level::WARN))]
     pub(super) async fn v1_models(&self) -> anyhow::Result<super::List<super::Model>> {
-        let request = http::Request::get("/v1/models").body(Full::default())?;
-        let response = self.request(request).await?;
-        let body = check_response(response).await?;
+        let body = self.get("/v1/models").await?;
         Ok(serde_json::from_slice(&body)?)
     }
 
     #[tracing::instrument(err(level = tracing::Level::WARN))]
     pub(super) async fn metrics(&self) -> anyhow::Result<super::metrics::Exposition> {
-        let request = http::Request::get("/metrics").body(Full::default())?;
-        let response = self.request(request).await?;
-        let body = check_response(response).await?;
+        let body = self.get("/metrics").await?;
         let body = str::from_utf8(&body)?;
         let (_, metricset) =
             nom::combinator::complete::<_, _, _, _>(openmetrics_nom::metricset)(body)
@@ -233,18 +234,23 @@ impl Backend {
 
         Ok(exposition)
     }
-}
 
-async fn check_response(response: http::Response<hyper::body::Incoming>) -> anyhow::Result<Bytes> {
-    let (parts, body) = response.into_parts();
-    let body = body.collect().await?.to_bytes();
-    if parts.status.is_success() {
-        Ok(body)
-    } else {
-        Err(anyhow::format_err!(
-            "status = {:?}, body = {:?}",
-            parts.status,
-            body
-        ))
+    async fn get(&self, uri: &str) -> anyhow::Result<Bytes> {
+        let request = http::Request::get(uri).body(Full::default())?;
+        tokio::time::timeout(self.config.timeout.unwrap_or(Duration::MAX), async {
+            let response = self.request(request).await?;
+            let (parts, body) = response.into_parts();
+            let body = body.collect().await?.to_bytes();
+            if parts.status.is_success() {
+                Ok(body)
+            } else {
+                Err(anyhow::format_err!(
+                    "status = {:?}, body = {:?}",
+                    parts.status,
+                    body,
+                ))
+            }
+        })
+        .await?
     }
 }
