@@ -48,7 +48,6 @@ jobs:
           name: openai-proxy
           path: target/x86_64-unknown-linux-musl/release/openai-proxy
   docker:
-    if: github.ref == 'refs/heads/main'
     needs:
       - cargo-build
     runs-on: ubuntu-latest
@@ -73,6 +72,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/hakuyume/openai-proxy:${{ github.sha }}
-            ghcr.io/hakuyume/openai-proxy
+          tags: ghcr.io/hakuyume/openai-proxy:${{ github.sha }}
