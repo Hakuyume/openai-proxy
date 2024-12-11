@@ -35,12 +35,12 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
     opts.try_tcp_on_error = true;
     let resolver = hickory_resolver::TokioAsyncResolver::tokio(config, opts);
 
-    let client = client::Client::new()?;
+    let pool = client::Pool::new()?;
 
     let (fs, backends) = args
         .backend
         .into_iter()
-        .map(|config| backend::watch(resolver.clone(), client.clone(), config))
+        .map(|config| backend::watch(resolver.clone(), pool.clone(), config))
         .unzip::<_, _, Vec<_>, _>();
     tokio::spawn(futures::future::join_all(fs));
 

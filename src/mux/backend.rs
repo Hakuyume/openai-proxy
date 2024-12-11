@@ -8,6 +8,7 @@ use std::net::IpAddr;
 use std::str::{self, FromStr};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use tower::ServiceExt;
 use tracing::Instrument;
 use url::Url;
 
@@ -63,7 +64,7 @@ impl FromStr for Config {
 }
 
 pub(super) struct Backend {
-    client: super::client::Client<Full<Bytes>>,
+    pool: super::client::Pool<Full<Bytes>>,
     config: Config,
     ip: IpAddr,
     models: Vec<super::Model>,
@@ -81,7 +82,7 @@ impl fmt::Debug for Backend {
 pub(super) type Backends = Arc<RwLock<Arc<[Backend]>>>;
 pub(super) fn watch(
     resolver: hickory_resolver::TokioAsyncResolver,
-    client: super::client::Client<Full<Bytes>>,
+    pool: super::client::Pool<Full<Bytes>>,
     config: Config,
 ) -> (impl Future<Output = Infallible>, Backends) {
     let backends = Backends::default();
@@ -112,7 +113,7 @@ pub(super) fn watch(
                 let next = {
                     let mut backends = lookup_ip
                         .map(|ip| Backend {
-                            client: client.clone(),
+                            pool: pool.clone(),
                             config: config.clone(),
                             ip,
                             models: Vec::new(),
@@ -185,14 +186,12 @@ impl Backend {
         tracing::info!(method = ?request.method(), uri = ?request.uri(), headers = ?request.headers());
 
         let response = self
-            .client
-            .request(
-                request,
-                &super::client::Options {
-                    ip: self.ip,
-                    http2_only: self.config.http2_only,
-                },
-            )
+            .pool
+            .service(&super::client::Options {
+                ip: self.ip,
+                http2_only: self.config.http2_only,
+            })
+            .oneshot(request)
             .await?;
 
         let response = {
