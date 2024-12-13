@@ -25,8 +25,7 @@ serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
 serde_urlencoded = "0.7.1"
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "signal", "time"] }
-tower = { version = "0.5.1", features = ["util"] }
-tower-http = { version = "0.6.2", features = ["follow-redirect", "trace"] }
+tower = { version = "0.5.1", features = ["filter", "util"] }
+tower-http = { version = "0.6.2", features = ["follow-redirect", "timeout", "trace"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
-url = "2.5.4"
