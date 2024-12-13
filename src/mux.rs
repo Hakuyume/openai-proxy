@@ -1,5 +1,6 @@
 mod backend;
 mod client;
+mod metrics;
 
 use axum::response::IntoResponse;
 use axum::{extract, routing, Json, Router};

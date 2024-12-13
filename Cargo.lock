@@ -791,6 +791,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper-inspect-io"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "424321588350a05e50201be6d706cb1b669a8c2f22db00d6fa1c0c4a68f1672e"
+dependencies = [
+ "hyper",
+ "hyper-util",
+ "pin-project",
+]
+
+[[package]]
 name = "hyper-rustls"
 version = "0.27.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1297,12 +1308,14 @@ dependencies = [
  "http-serde",
  "humantime-serde",
  "hyper",
+ "hyper-inspect-io",
  "hyper-rustls",
  "hyper-util",
  "lru",
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-util",
+ "pin-project",
  "rand",
  "rustls",
  "serde",
@@ -1370,6 +1383,26 @@ name = "percent-encoding"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
+
+[[package]]
+name = "pin-project"
+version = "1.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be57f64e946e500c8ee36ef6331845d40a93055567ec57e8fae13efd33759b95"
+dependencies = [
+ "pin-project-internal",
+]
+
+[[package]]
+name = "pin-project-internal"
+version = "1.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c0f5fad0874fc7abcd4d750e76917eaebbecaa2c20bde22e1dbeeba8beb758c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "pin-project-lite"
