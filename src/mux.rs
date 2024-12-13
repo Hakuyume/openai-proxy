@@ -18,7 +18,6 @@ use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 use tokio::signal::unix::{signal, SignalKind};
-use tower_http::trace::TraceLayer;
 
 #[derive(Parser)]
 pub(super) struct Args {
@@ -29,20 +28,30 @@ pub(super) struct Args {
 }
 
 pub(super) async fn main(args: Args) -> anyhow::Result<()> {
-    let (config, mut opts) = hickory_resolver::system_conf::read_system_conf()?;
-    opts.ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
-    opts.cache_size = 0;
-    opts.try_tcp_on_error = true;
-    let resolver = hickory_resolver::TokioAsyncResolver::tokio(config, opts);
+    let prometheus_recorder =
+        metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let prometheus_handle = prometheus_recorder.handle();
+    metrics_util::layers::Stack::new(prometheus_recorder)
+        .push(metrics_util::layers::PrefixLayer::new(env!(
+            "CARGO_BIN_NAME"
+        )))
+        .install()?;
 
+    let resolver = {
+        let (config, mut opts) = hickory_resolver::system_conf::read_system_conf()?;
+        opts.ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
+        opts.cache_size = 0;
+        opts.try_tcp_on_error = true;
+        hickory_resolver::TokioAsyncResolver::tokio(config, opts)
+    };
     let pool = client::Pool::new()?;
 
-    let (fs, backends) = args
+    let (watch_backends, backends) = args
         .backend
         .into_iter()
         .map(|config| backend::watch(resolver.clone(), pool.clone(), config))
         .unzip::<_, _, Vec<_>, _>();
-    tokio::spawn(futures::future::join_all(fs));
+    tokio::spawn(futures::future::join_all(watch_backends));
 
     let state = Arc::new(State {
         rng: Mutex::new(StdRng::from_entropy()),
@@ -55,8 +64,12 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
         .route("/v1/completions", routing::post(tunnel))
         .route("/v1/embeddings", routing::post(tunnel))
         .with_state(state.clone())
-        .layer(TraceLayer::new_for_http())
-        .route("/health", routing::get(|| future::ready(())));
+        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .route("/health", routing::get(|| future::ready(())))
+        .route(
+            "/metrics",
+            routing::get(move || future::ready(prometheus_handle.render())),
+        );
 
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     axum::serve(listener, app)

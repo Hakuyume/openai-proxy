@@ -19,6 +19,9 @@ hyper = "1.5.1"
 hyper-rustls = { version = "0.27.3", features = ["http1", "http2", "webpki-roots"] }
 hyper-util = { version = "0.1.10", features = ["client-legacy", "http1", "http2", "tokio"] }
 lru = "0.12.5"
+metrics = "0.24.1"
+metrics-exporter-prometheus = { version = "0.16.0", default-features = false }
+metrics-util = "0.18.0"
 rand = "0.8.5"
 rustls = "0.23.19"
 serde = { version = "1.0.215", features = ["derive"] }
