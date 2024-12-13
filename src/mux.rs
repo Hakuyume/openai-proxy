@@ -134,7 +134,7 @@ async fn tunnel(
         .collect::<Vec<_>>();
     let backend = backends
         .choose(&mut *state.rng.lock().unwrap())
-        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "unknown model"))?;
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "model not found"))?;
 
     tracing::info!(model, backends = backends.len(), ?backend);
 
