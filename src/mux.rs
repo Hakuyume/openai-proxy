@@ -35,12 +35,12 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
     opts.try_tcp_on_error = true;
     let resolver = hickory_resolver::TokioAsyncResolver::tokio(config, opts);
 
-    let client = client::Client::new()?;
+    let pool = client::Pool::new()?;
 
     let (fs, backends) = args
         .backend
         .into_iter()
-        .map(|config| backend::watch(resolver.clone(), client.clone(), config))
+        .map(|config| backend::watch(resolver.clone(), pool.clone(), config))
         .unzip::<_, _, Vec<_>, _>();
     tokio::spawn(futures::future::join_all(fs));
 
@@ -105,13 +105,6 @@ async fn tunnel(
     where
         M: fmt::Display,
     {
-        #[derive(Serialize)]
-        #[serde(tag = "object", rename = "error")]
-        struct Error {
-            #[serde(with = "http_serde::status_code")]
-            code: StatusCode,
-            message: String,
-        }
         (
             code,
             Json(Error {
@@ -132,7 +125,6 @@ async fn tunnel(
             .map_err(|e| error(StatusCode::BAD_REQUEST, e))?
             .model
     };
-    tracing::info!(model);
 
     let backends = state.backends();
     let backends = backends
@@ -142,13 +134,22 @@ async fn tunnel(
         .collect::<Vec<_>>();
     let backend = backends
         .choose(&mut *state.rng.lock().unwrap())
-        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "unknown model"))?;
-    tracing::info!(candidates = backends.len(), ?backend);
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "model not found"))?;
+
+    tracing::info!(model, backends = backends.len(), ?backend);
 
     backend
         .request(http::Request::from_parts(parts, Full::new(body)))
         .map_err(|e| error(StatusCode::BAD_GATEWAY, e))
         .await
+}
+
+#[derive(Serialize)]
+#[serde(tag = "object", rename = "error")]
+struct Error {
+    #[serde(with = "http_serde::status_code")]
+    code: StatusCode,
+    message: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

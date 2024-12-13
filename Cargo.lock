@@ -1195,7 +1195,6 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "url",
 ]
 
 [[package]]
@@ -1809,6 +1808,7 @@ dependencies = [
  "http-body",
  "iri-string",
  "pin-project-lite",
+ "tokio",
  "tower",
  "tower-layer",
  "tower-service",

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 #[derive(Clone)]
-pub(super) struct Client<B> {
+pub(super) struct Pool<B> {
     tls_config: rustls::ClientConfig,
     cache: Arc<Mutex<lru::LruCache<Options, Service<B>>>>,
 }
@@ -24,9 +24,9 @@ type Service<B> = tower::util::BoxCloneService<
     hyper_util::client::legacy::Error,
 >;
 
-impl<B> Client<B>
+impl<B> Pool<B>
 where
-    B: Default + http_body::Body + Send + Unpin + 'static,
+    B: http_body::Body + Send + Unpin + 'static,
     B::Data: Send,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
@@ -46,23 +46,18 @@ where
         })
     }
 
-    pub(super) fn request(
-        &self,
-        request: http::Request<B>,
-        options: &Options,
-    ) -> tower::util::Oneshot<Service<B>, http::Request<B>> {
+    pub(super) fn service(&self, options: &Options) -> Service<B> {
         let mut cache = self.cache.lock().unwrap_or_else(|mut e| {
             **e.get_mut() = lru::LruCache::new(Self::CACHE_CAP);
             self.cache.clear_poison();
             e.into_inner()
         });
-        let service = cache
-            .get_or_insert(options.clone(), || self.service(options))
-            .clone();
-        service.oneshot(request)
+        cache
+            .get_or_insert(options.clone(), || self.build_service(options))
+            .clone()
     }
 
-    fn service(&self, options: &Options) -> Service<B> {
+    fn build_service(&self, options: &Options) -> Service<B> {
         let mut connector =
             hyper_util::client::legacy::connect::HttpConnector::new_with_resolver({
                 let f = futures::future::ok::<_, Infallible>(iter::once((options.ip, 0).into()));
@@ -75,15 +70,9 @@ where
             .enable_http1()
             .enable_http2()
             .wrap_connector(connector);
-        let service =
-            hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-                .http2_only(options.http2_only)
-                .build(connector);
-
-        let service = tower::ServiceBuilder::new()
-            .layer(tower_http::follow_redirect::FollowRedirectLayer::new())
-            .service(service);
-
-        service.boxed_clone()
+        hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+            .http2_only(options.http2_only)
+            .build(connector)
+            .boxed_clone()
     }
 }
