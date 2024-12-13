@@ -4,12 +4,14 @@ use http::Uri;
 use http_body_util::{BodyExt, Full};
 use serde::Deserialize;
 use std::convert::Infallible;
+use std::fmt;
+use std::future;
 use std::future::Future;
+use std::mem;
 use std::net::IpAddr;
 use std::str::{self, FromStr};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use std::{fmt, future};
 use tower::ServiceExt;
 use tracing::Instrument;
 
@@ -53,12 +55,13 @@ impl FromStr for Config {
             interval,
             timeout,
         } = serde_urlencoded::from_str(
-            parts
-                .path_and_query
-                .take()
-                .as_ref()
-                .and_then(http::uri::PathAndQuery::query)
-                .unwrap_or_default(),
+            mem::replace(
+                &mut parts.path_and_query,
+                Some(http::uri::PathAndQuery::from_static("/")),
+            )
+            .as_ref()
+            .and_then(http::uri::PathAndQuery::query)
+            .unwrap_or_default(),
         )
         .map_err(|e| e.to_string())?;
 

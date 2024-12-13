@@ -105,13 +105,6 @@ async fn tunnel(
     where
         M: fmt::Display,
     {
-        #[derive(Serialize)]
-        #[serde(tag = "object", rename = "error")]
-        struct Error {
-            #[serde(with = "http_serde::status_code")]
-            code: StatusCode,
-            message: String,
-        }
         (
             code,
             Json(Error {
@@ -132,7 +125,6 @@ async fn tunnel(
             .map_err(|e| error(StatusCode::BAD_REQUEST, e))?
             .model
     };
-    tracing::info!(model);
 
     let backends = state.backends();
     let backends = backends
@@ -143,12 +135,21 @@ async fn tunnel(
     let backend = backends
         .choose(&mut *state.rng.lock().unwrap())
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "unknown model"))?;
-    tracing::info!(candidates = backends.len(), ?backend);
+
+    tracing::info!(model, backends = backends.len(), ?backend);
 
     backend
         .request(http::Request::from_parts(parts, Full::new(body)))
         .map_err(|e| error(StatusCode::BAD_GATEWAY, e))
         .await
+}
+
+#[derive(Serialize)]
+#[serde(tag = "object", rename = "error")]
+struct Error {
+    #[serde(with = "http_serde::status_code")]
+    code: StatusCode,
+    message: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
