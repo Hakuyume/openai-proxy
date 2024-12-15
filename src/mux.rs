@@ -9,16 +9,19 @@ use clap::{ArgAction, Parser};
 use futures::TryFutureExt;
 use http::StatusCode;
 use http_body_util::Full;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::future;
+use std::io;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
-use tokio::signal::unix::{signal, SignalKind};
+use std::time::Duration;
+use tower::Service;
 
 #[derive(Parser)]
 pub(super) struct Args {
@@ -73,16 +76,41 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
         );
 
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown({
-            let mut sigterm = signal(SignalKind::terminate())?;
-            async move {
-                sigterm.recv().await;
+    loop {
+        let mut labels = Vec::new();
+        let io = match listener.accept().await {
+            Ok((stream, _)) => {
+                ::metrics::counter!("server_accept", labels).increment(1);
+                hyper_inspect_io::Io::new(
+                    TokioIo::new(stream),
+                    metrics::HyperIo::new("server_", Vec::new()),
+                )
             }
-        })
-        .await?;
-
-    Ok(())
+            Err(e) => {
+                labels.extend(metrics::error_label(&e));
+                ::metrics::counter!("server_accept_error", labels).increment(1);
+                // https://github.com/tokio-rs/axum/blob/axum-v0.7.9/axum/src/serve.rs#L465-L498
+                if !matches!(
+                    e.kind(),
+                    io::ErrorKind::ConnectionRefused
+                        | io::ErrorKind::ConnectionAborted
+                        | io::ErrorKind::ConnectionReset
+                ) {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                continue;
+            }
+        };
+        let hyper_service = hyper::service::service_fn({
+            let app = app.clone();
+            move |request: http::Request<hyper::body::Incoming>| app.clone().call(request)
+        });
+        tokio::spawn(async move {
+            hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+                .serve_connection_with_upgrades(io, hyper_service)
+                .await
+        });
+    }
 }
 
 struct State {
