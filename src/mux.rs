@@ -8,7 +8,7 @@ use bytes::Bytes;
 use clap::{ArgAction, Parser};
 use futures::TryFutureExt;
 use http::StatusCode;
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -103,7 +103,26 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
         };
         let hyper_service = hyper::service::service_fn({
             let app = app.clone();
-            move |request: http::Request<hyper::body::Incoming>| app.clone().call(request)
+            move |request: http::Request<hyper::body::Incoming>| {
+                let labels = vec![
+                    (&"method", &request.method().to_string()).into(),
+                    (&"path", &request.uri().path().to_string()).into(),
+                ];
+                ::metrics::counter!("request", labels.clone()).increment(1);
+                let guard = metrics::Guard::new("response", labels);
+                app.clone().call(request).map_ok(move |response| {
+                    let (parts, body) = response.into_parts();
+                    let guard = guard.map(|name, mut labels| {
+                        labels.push((&"status", &parts.status.as_u16().to_string()).into());
+                        (name, labels)
+                    });
+                    let body = body.map_err(move |e| {
+                        let _ = &guard;
+                        e
+                    });
+                    http::Response::from_parts(parts, body)
+                })
+            }
         });
         tokio::spawn(async move {
             hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
