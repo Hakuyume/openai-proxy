@@ -1,5 +1,6 @@
 mod backend;
 mod client;
+mod metrics;
 
 use axum::response::IntoResponse;
 use axum::{extract, routing, Json, Router};
@@ -7,18 +8,20 @@ use bytes::Bytes;
 use clap::{ArgAction, Parser};
 use futures::TryFutureExt;
 use http::StatusCode;
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::future;
+use std::io;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
-use tokio::signal::unix::{signal, SignalKind};
-use tower_http::trace::TraceLayer;
+use std::time::Duration;
+use tower::Service;
 
 #[derive(Parser)]
 pub(super) struct Args {
@@ -29,20 +32,30 @@ pub(super) struct Args {
 }
 
 pub(super) async fn main(args: Args) -> anyhow::Result<()> {
-    let (config, mut opts) = hickory_resolver::system_conf::read_system_conf()?;
-    opts.ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
-    opts.cache_size = 0;
-    opts.try_tcp_on_error = true;
-    let resolver = hickory_resolver::TokioAsyncResolver::tokio(config, opts);
+    let prometheus_recorder =
+        metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let prometheus_handle = prometheus_recorder.handle();
+    metrics_util::layers::Stack::new(prometheus_recorder)
+        .push(metrics_util::layers::PrefixLayer::new(env!(
+            "CARGO_BIN_NAME"
+        )))
+        .install()?;
 
+    let resolver = {
+        let (config, mut opts) = hickory_resolver::system_conf::read_system_conf()?;
+        opts.ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
+        opts.cache_size = 0;
+        opts.try_tcp_on_error = true;
+        hickory_resolver::TokioAsyncResolver::tokio(config, opts)
+    };
     let pool = client::Pool::new()?;
 
-    let (fs, backends) = args
+    let (watch_backends, backends) = args
         .backend
         .into_iter()
         .map(|config| backend::watch(resolver.clone(), pool.clone(), config))
         .unzip::<_, _, Vec<_>, _>();
-    tokio::spawn(futures::future::join_all(fs));
+    tokio::spawn(futures::future::join_all(watch_backends));
 
     let state = Arc::new(State {
         rng: Mutex::new(StdRng::from_entropy()),
@@ -55,20 +68,68 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
         .route("/v1/completions", routing::post(tunnel))
         .route("/v1/embeddings", routing::post(tunnel))
         .with_state(state.clone())
-        .layer(TraceLayer::new_for_http())
-        .route("/health", routing::get(|| future::ready(())));
+        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .route("/health", routing::get(|| future::ready(())))
+        .route(
+            "/metrics",
+            routing::get(move || future::ready(prometheus_handle.render())),
+        );
 
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown({
-            let mut sigterm = signal(SignalKind::terminate())?;
-            async move {
-                sigterm.recv().await;
+    loop {
+        let mut labels = Vec::new();
+        let io = match listener.accept().await {
+            Ok((stream, _)) => {
+                ::metrics::counter!("server_accept", labels).increment(1);
+                hyper_inspect_io::Io::new(
+                    TokioIo::new(stream),
+                    metrics::HyperIo::new("server_", Vec::new()),
+                )
             }
-        })
-        .await?;
-
-    Ok(())
+            Err(e) => {
+                labels.extend(metrics::error_label(&e));
+                ::metrics::counter!("server_accept_error", labels).increment(1);
+                // https://github.com/tokio-rs/axum/blob/axum-v0.7.9/axum/src/serve.rs#L465-L498
+                if !matches!(
+                    e.kind(),
+                    io::ErrorKind::ConnectionRefused
+                        | io::ErrorKind::ConnectionAborted
+                        | io::ErrorKind::ConnectionReset
+                ) {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                continue;
+            }
+        };
+        let hyper_service = hyper::service::service_fn({
+            let app = app.clone();
+            move |request: http::Request<hyper::body::Incoming>| {
+                let labels = vec![
+                    (&"method", &request.method().to_string()).into(),
+                    (&"path", &request.uri().path().to_string()).into(),
+                ];
+                ::metrics::counter!("request", labels.clone()).increment(1);
+                let guard = metrics::Guard::new("response", labels);
+                app.clone().call(request).map_ok(move |response| {
+                    let (parts, body) = response.into_parts();
+                    let guard = guard.map(|name, mut labels| {
+                        labels.push((&"status", &parts.status.as_u16().to_string()).into());
+                        (name, labels)
+                    });
+                    let body = body.map_err(move |e| {
+                        let _ = &guard;
+                        e
+                    });
+                    http::Response::from_parts(parts, body)
+                })
+            }
+        });
+        tokio::spawn(async move {
+            hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+                .serve_connection_with_upgrades(io, hyper_service)
+                .await
+        });
+    }
 }
 
 struct State {
