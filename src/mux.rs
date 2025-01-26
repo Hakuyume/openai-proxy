@@ -7,7 +7,7 @@ use axum::{extract, routing, Json, Router};
 use bytes::Bytes;
 use clap::{ArgAction, Parser};
 use futures::TryFutureExt;
-use http::StatusCode;
+use http::{Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use rand::rngs::StdRng;
@@ -103,7 +103,7 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
         };
         let hyper_service = hyper::service::service_fn({
             let app = app.clone();
-            move |request: http::Request<hyper::body::Incoming>| {
+            move |request: Request<hyper::body::Incoming>| {
                 let labels = vec![
                     (&"method", &request.method().to_string()).into(),
                     (&"path", &request.uri().path().to_string()).into(),
@@ -120,7 +120,7 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
                         let _ = &guard;
                         e
                     });
-                    http::Response::from_parts(parts, body)
+                    Response::from_parts(parts, body)
                 })
             }
         });
@@ -161,7 +161,7 @@ async fn tunnel(
     extract::State(state): extract::State<Arc<State>>,
     parts: http::request::Parts,
     body: Bytes,
-) -> Result<http::Response<hyper::body::Incoming>, axum::response::Response> {
+) -> Result<Response<hyper::body::Incoming>, axum::response::Response> {
     fn error<M>(code: StatusCode, message: M) -> axum::response::Response
     where
         M: fmt::Display,
@@ -200,7 +200,7 @@ async fn tunnel(
     tracing::info!(model, backends = backends.len(), ?backend);
 
     backend
-        .request(http::Request::from_parts(parts, Full::new(body)))
+        .send(Request::from_parts(parts, Full::new(body)))
         .map_err(|e| error(StatusCode::BAD_GATEWAY, e))
         .await
 }
