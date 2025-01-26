@@ -105,27 +105,21 @@ impl Backend {
         &self,
     ) -> impl Future<Output = Result<super::List<super::Model>, BoxError>> + Send + use<'_> {
         let service = ServiceBuilder::new()
-            .map_err(
-                |e: http_extra::from_json::response::Error<BoxError, Infallible>| match e {
-                    http_extra::from_json::response::Error::Service(e) => e,
-                    http_extra::from_json::response::Error::Json(e) => e.into(),
-                },
-            )
-            .layer(http_extra::from_json::response::Layer::<
-                super::List<super::Model>,
-            >::default())
-            .map_err(
-                |e: http_extra::check_status::Error<BoxError, Infallible>| match e {
-                    http_extra::check_status::Error::Service(e) => e,
-                    http_extra::check_status::Error::Status(e) => e.into(),
-                },
-            )
+            .map_err(|e| match e {
+                http_extra::from_json::response::Error::Service(e) => e,
+                http_extra::from_json::response::Error::Json(e) => e.into(),
+            })
+            .layer(http_extra::from_json::response::Layer::default())
+            .map_err(|e| match e {
+                http_extra::check_status::Error::Service(e) => e,
+                http_extra::check_status::Error::Status(e) => e.into(),
+            })
             .layer(http_extra::check_status::Layer::default())
             .layer(tower_http::timeout::TimeoutLayer::new(
                 self.config.timeout.unwrap_or(Duration::MAX),
             ))
             .map_err(
-                |e: http_extra::collect_body::response::Error<BoxError, hyper::Error>| match e {
+                |e: http_extra::collect_body::response::Error<_, hyper::Error>| match e {
                     http_extra::collect_body::response::Error::Service(e) => e,
                     http_extra::collect_body::response::Error::Body(e) => e.into(),
                 },
