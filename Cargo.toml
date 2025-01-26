@@ -4,33 +4,34 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.94"
-axum = "0.7.9"
+anyhow = "1.0.95"
+axum = "0.8.1"
 bytes = "1.9.0"
-clap = { version = "4.5.23", features = ["derive"] }
+clap = { version = "4.5.27", features = ["derive"] }
 futures = "0.3.31"
-hickory-resolver = "0.24.1"
+hickory-resolver = "0.24.2"
 http = "1.2.0"
 http-body = "1.0.1"
 http-body-util = "0.1.2"
+http-extra = { git = "https://github.com/Hakuyume/http-extra-rs.git", rev = "e34934b", default-features = false }
 http-serde = "2.1.1"
 humantime-serde = "1.1.1"
-hyper = "1.5.1"
+hyper = "1.5.2"
 hyper-inspect-io = { version = "0.1.0", features = ["hyper-util"] }
-hyper-rustls = { version = "0.27.3", features = ["http1", "http2", "webpki-roots"] }
+hyper-rustls = { version = "0.27.5", features = ["http1", "http2", "webpki-roots"] }
 hyper-util = { version = "0.1.10", features = ["client-legacy", "http1", "http2", "server", "tokio"] }
 lru = "0.12.5"
 metrics = "0.24.1"
-metrics-exporter-prometheus = { version = "0.16.0", default-features = false }
-metrics-util = "0.18.0"
-pin-project = "1.1.7"
+metrics-exporter-prometheus = { version = "0.16.1", default-features = false }
+metrics-util = "0.19.0"
+pin-project = "1.1.8"
 rand = "0.8.5"
-rustls = "0.23.19"
-serde = { version = "1.0.215", features = ["derive"] }
-serde_json = "1.0.133"
+rustls = "0.23.21"
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.137"
 serde_urlencoded = "0.7.1"
-tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "time"] }
-tower = { version = "0.5.1", features = ["filter", "util"] }
+tokio = { version = "1.43.0", features = ["macros", "rt-multi-thread", "time"] }
+tower = { version = "0.5.2", features = ["filter", "util"] }
 tower-http = { version = "0.6.2", features = ["follow-redirect", "timeout", "trace"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"

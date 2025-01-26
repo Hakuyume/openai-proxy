@@ -1,5 +1,5 @@
 use futures::FutureExt;
-use http::Uri;
+use http::{Request, Response, Uri};
 use hyper_rustls::ConfigBuilderExt;
 use std::convert::Infallible;
 use std::iter;
@@ -21,8 +21,8 @@ pub(super) struct Options {
 }
 
 type Service<B> = tower::util::BoxCloneService<
-    http::Request<B>,
-    http::Response<hyper::body::Incoming>,
+    Request<B>,
+    Response<hyper::body::Incoming>,
     hyper_util::client::legacy::Error,
 >;
 
