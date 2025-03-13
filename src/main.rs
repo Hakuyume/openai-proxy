@@ -1,3 +1,4 @@
+mod azure;
 mod misc;
 mod mux;
 
@@ -11,6 +12,7 @@ struct Args {
 
 #[derive(Parser)]
 enum Command {
+    Azure(azure::Args),
     Mux(mux::Args),
 }
 
@@ -20,6 +22,7 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
     match args.command {
+        Command::Azure(args) => azure::main(args).await,
         Command::Mux(args) => mux::main(args).await,
     }
 }
