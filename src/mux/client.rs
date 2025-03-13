@@ -1,6 +1,4 @@
-use futures::FutureExt;
-use http::{Request, Response, Uri};
-use hyper_rustls::ConfigBuilderExt;
+use http::{Request, Response};
 use std::convert::Infallible;
 use std::iter;
 use std::net::IpAddr;
@@ -35,15 +33,8 @@ where
     const CACHE_CAP: NonZeroUsize = NonZeroUsize::new(u16::MAX as _).unwrap();
 
     pub(super) fn new() -> Result<Self, rustls::Error> {
-        let tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::aws_lc_rs::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()?
-        .with_webpki_roots()
-        .with_no_client_auth();
-
         Ok(Self {
-            tls_config,
+            tls_config: crate::misc::tls_config()?,
             cache: Arc::new(Mutex::new(lru::LruCache::new(Self::CACHE_CAP))),
         })
     }
@@ -67,36 +58,10 @@ where
             });
         connector.enforce_http(false);
 
-        let connector = tower::service_fn({
-            let options = options.clone();
-            move |uri: Uri| {
-                let mut labels = Vec::new();
-                labels.push((&"options.ip", &options.ip.to_string()).into());
-                labels.push((&"options.http2_only", &options.http2_only.to_string()).into());
-                if let Some(scheme) = uri.scheme_str() {
-                    labels.push((&"uri.scheme", &scheme.to_owned()).into());
-                }
-                if let Some(host) = uri.host() {
-                    labels.push((&"uri.host", &host.to_owned()).into());
-                }
-                if let Some(port) = uri.port_u16() {
-                    labels.push((&"uri.port", &port.to_string()).into());
-                }
-                connector.clone().oneshot(uri).map(|output| match output {
-                    Ok(io) => {
-                        metrics::counter!("client_connect", labels.clone()).increment(1);
-                        Ok(hyper_inspect_io::Io::new(
-                            io,
-                            super::metrics::HyperIo::new("client_", labels),
-                        ))
-                    }
-                    Err(e) => {
-                        labels.extend(super::metrics::error_label(&e));
-                        metrics::counter!("client_connect_error", labels).increment(1);
-                        Err(e)
-                    }
-                })
-            }
+        let options = options.clone();
+        let connector = crate::misc::metrics::wrap_connector(connector, move |labels, _| {
+            labels.push((&"options.ip", &options.ip.to_string()).into());
+            labels.push((&"options.http2_only", &options.http2_only.to_string()).into());
         });
 
         let connector = hyper_rustls::HttpsConnectorBuilder::new()

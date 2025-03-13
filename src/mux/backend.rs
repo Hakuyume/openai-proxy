@@ -77,7 +77,7 @@ pub(super) struct Backend {
     pool: super::client::Pool<Full<Bytes>>,
     config: Config,
     ip: IpAddr,
-    models: Vec<super::Model>,
+    models: Vec<crate::misc::schemas::Model>,
 }
 
 impl fmt::Debug for Backend {
@@ -90,7 +90,7 @@ impl fmt::Debug for Backend {
 }
 
 impl Backend {
-    pub(super) fn models(&self) -> &[super::Model] {
+    pub(super) fn models(&self) -> &[crate::misc::schemas::Model] {
         &self.models
     }
 
@@ -103,7 +103,10 @@ impl Backend {
 
     fn v1_models(
         &self,
-    ) -> impl Future<Output = Result<super::List<super::Model>, BoxError>> + Send + use<'_> {
+    ) -> impl Future<
+        Output = Result<crate::misc::schemas::List<crate::misc::schemas::Model>, BoxError>,
+    > + Send
+    + use<'_> {
         let service = ServiceBuilder::new()
             .map_err(|e| match e {
                 http_extra::from_json::response::Error::Service(e) => e,
@@ -140,7 +143,7 @@ impl Backend {
     fn service(
         &self,
     ) -> impl Clone
-           + tower::Service<
+    + tower::Service<
         Request<Full<Bytes>>,
         Response = Response<hyper::body::Incoming>,
         Error = BoxError,

@@ -1,3 +1,4 @@
+mod misc;
 mod mux;
 
 use clap::Parser;
