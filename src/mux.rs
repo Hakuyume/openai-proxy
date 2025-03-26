@@ -10,7 +10,7 @@ use http::{Request, Response, StatusCode};
 use http_body_util::Full;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use serde::Deserialize;
 use std::fmt;
 use std::future;
@@ -30,11 +30,11 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
     let prometheus_handle = crate::misc::metrics::install()?;
 
     let resolver = {
-        let (config, mut opts) = hickory_resolver::system_conf::read_system_conf()?;
-        opts.ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
-        opts.cache_size = 0;
-        opts.try_tcp_on_error = true;
-        hickory_resolver::TokioAsyncResolver::tokio(config, opts)
+        let mut builder = hickory_resolver::Resolver::builder_tokio()?;
+        builder.options_mut().ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
+        builder.options_mut().cache_size = 0;
+        builder.options_mut().try_tcp_on_error = true;
+        builder.build()
     };
     let pool = client::Pool::new()?;
 
@@ -46,7 +46,7 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
     tokio::spawn(futures::future::join_all(watch_backends));
 
     let state = Arc::new(State {
-        rng: Mutex::new(StdRng::from_entropy()),
+        rng: Mutex::new(StdRng::from_os_rng()),
         backends,
     });
 

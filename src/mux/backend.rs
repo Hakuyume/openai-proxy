@@ -181,7 +181,7 @@ fn resolve_uri(base: Uri, reference: Uri) -> Result<Uri, http::uri::InvalidUriPa
 
 pub(super) type Backends = Arc<RwLock<Arc<[Backend]>>>;
 pub(super) fn watch(
-    resolver: hickory_resolver::TokioAsyncResolver,
+    resolver: hickory_resolver::TokioResolver,
     pool: super::client::Pool<Full<Bytes>>,
     config: Config,
 ) -> (impl Future<Output = Infallible> + Send + 'static, Backends) {
