@@ -13,7 +13,10 @@ use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
-pub(super) type Config = Vec<crate::Config>;
+#[derive(Clone, Debug, Deserialize)]
+pub(super) struct Config {
+    inner: Vec<crate::Config>,
+}
 
 pub(super) fn service(
     pool: &crate::misc::pool::Pool<Full<Bytes>>,
@@ -21,6 +24,7 @@ pub(super) fn service(
 ) -> anyhow::Result<Router> {
     let rng = Arc::new(Mutex::new(StdRng::from_os_rng()));
     let services = config
+        .inner
         .into_iter()
         .map(|config| crate::service(pool, config))
         .collect::<Result<_, _>>()?;

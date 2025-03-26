@@ -1,3 +1,4 @@
+mod auth;
 mod azure;
 mod misc;
 mod mux;
@@ -22,6 +23,7 @@ struct Args {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Config {
+    Auth(auth::Config),
     Azure(azure::Config),
     Mux(mux::Config),
 }
@@ -36,6 +38,7 @@ impl FromStr for Config {
 
 fn service(pool: &crate::misc::pool::Pool<Full<Bytes>>, config: Config) -> anyhow::Result<Router> {
     match config {
+        Config::Auth(config) => auth::service(pool, config),
         Config::Azure(config) => azure::service(pool, config),
         Config::Mux(config) => mux::service(pool, config),
     }
