@@ -1,4 +1,3 @@
-use axum::response::IntoResponse;
 use axum::{Json, Router, extract, routing};
 use bytes::Bytes;
 use clap::{ArgAction, Parser};
@@ -7,7 +6,6 @@ use http::{HeaderValue, Request, Response, StatusCode};
 use http_body_util::Full;
 use serde::Deserialize;
 use std::env;
-use std::fmt;
 use std::future;
 use std::net::SocketAddr;
 use tower::ServiceExt;
@@ -98,20 +96,6 @@ async fn tunnel(
     mut parts: http::request::Parts,
     body: Bytes,
 ) -> Result<Response<hyper::body::Incoming>, axum::response::Response> {
-    fn error<M>(code: StatusCode, message: M) -> axum::response::Response
-    where
-        M: fmt::Display,
-    {
-        (
-            code,
-            Json(crate::misc::schemas::Error {
-                code,
-                message: message.to_string(),
-            }),
-        )
-            .into_response()
-    }
-
     let model = {
         #[derive(Deserialize)]
         struct Body {
@@ -119,7 +103,7 @@ async fn tunnel(
         }
 
         serde_json::from_slice::<Body>(&body)
-            .map_err(|e| error(StatusCode::BAD_REQUEST, e))?
+            .map_err(crate::misc::map_err(StatusCode::BAD_REQUEST))?
             .model
     };
 
@@ -128,7 +112,7 @@ async fn tunnel(
         state.resource, state.api_version,
     )
     .parse()
-    .map_err(|e| error(StatusCode::BAD_REQUEST, e))?;
+    .map_err(crate::misc::map_err(StatusCode::BAD_REQUEST))?;
     parts.version = http::Version::default();
     for name in [
         http::header::AUTHORIZATION,
@@ -144,6 +128,6 @@ async fn tunnel(
     state
         .service
         .oneshot(Request::from_parts(parts, Full::new(body)))
-        .map_err(|e| error(StatusCode::BAD_GATEWAY, e))
+        .map_err(crate::misc::map_err(StatusCode::BAD_GATEWAY))
         .await
 }

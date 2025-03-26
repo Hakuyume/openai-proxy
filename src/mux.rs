@@ -1,7 +1,6 @@
 mod backend;
 mod client;
 
-use axum::response::IntoResponse;
 use axum::{Json, Router, extract, routing};
 use bytes::Bytes;
 use clap::{ArgAction, Parser};
@@ -12,7 +11,6 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;
 use serde::Deserialize;
-use std::fmt;
 use std::future;
 use std::net::SocketAddr;
 use std::ops::Deref;
@@ -99,20 +97,6 @@ async fn tunnel(
     parts: http::request::Parts,
     body: Bytes,
 ) -> Result<Response<hyper::body::Incoming>, axum::response::Response> {
-    fn error<M>(code: StatusCode, message: M) -> axum::response::Response
-    where
-        M: fmt::Display,
-    {
-        (
-            code,
-            Json(crate::misc::schemas::Error {
-                code,
-                message: message.to_string(),
-            }),
-        )
-            .into_response()
-    }
-
     let model = {
         #[derive(Deserialize)]
         struct Body {
@@ -120,7 +104,7 @@ async fn tunnel(
         }
 
         serde_json::from_slice::<Body>(&body)
-            .map_err(|e| error(StatusCode::BAD_REQUEST, e))?
+            .map_err(crate::misc::map_err(StatusCode::BAD_REQUEST))?
             .model
     };
 
@@ -137,12 +121,12 @@ async fn tunnel(
         .collect::<Vec<_>>();
     let backend = backends
         .choose(&mut *state.rng.lock().unwrap())
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, "model not found"))?;
+        .ok_or_else(|| crate::misc::map_err(StatusCode::NOT_FOUND)("model not found"))?;
 
     tracing::info!(model, backends = backends.len(), ?backend);
 
     backend
         .send(Request::from_parts(parts, Full::new(body)))
-        .map_err(|e| error(StatusCode::BAD_GATEWAY, e))
+        .map_err(crate::misc::map_err(StatusCode::BAD_GATEWAY))
         .await
 }
