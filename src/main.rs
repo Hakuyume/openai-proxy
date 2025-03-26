@@ -1,7 +1,7 @@
 mod auth;
 mod azure;
 mod misc;
-mod mux;
+mod route;
 
 use axum::{Router, routing};
 use bytes::Bytes;
@@ -25,7 +25,7 @@ struct Args {
 enum Config {
     Auth(auth::Config),
     Azure(azure::Config),
-    Mux(mux::Config),
+    Route(route::Config),
 }
 
 impl FromStr for Config {
@@ -40,7 +40,7 @@ fn service(pool: &crate::misc::pool::Pool<Full<Bytes>>, config: Config) -> anyho
     match config {
         Config::Auth(config) => auth::service(pool, config),
         Config::Azure(config) => azure::service(pool, config),
-        Config::Mux(config) => mux::service(pool, config),
+        Config::Route(config) => route::service(pool, config),
     }
 }
 
