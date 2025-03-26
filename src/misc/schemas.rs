@@ -20,5 +20,5 @@ pub struct List<T> {
 pub struct Model {
     pub id: String,
     #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
+    _extra: serde_json::Map<String, serde_json::Value>,
 }

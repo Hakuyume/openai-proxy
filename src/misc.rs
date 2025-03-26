@@ -1,20 +1,13 @@
 pub mod metrics;
+pub mod pool;
 pub mod schemas;
 
 use axum::response::IntoResponse;
-use http::StatusCode;
-use hyper_rustls::ConfigBuilderExt;
+use futures::TryFutureExt;
+use http::{Request, Response, StatusCode};
+use http_body::Body;
 use std::fmt;
-use std::sync::Arc;
-
-pub fn tls_config() -> Result<rustls::ClientConfig, rustls::Error> {
-    Ok(rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::aws_lc_rs::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()?
-    .with_webpki_roots()
-    .with_no_client_auth())
-}
+use tower::{Service, ServiceBuilder, ServiceExt};
 
 pub fn map_err<M>(code: StatusCode) -> impl FnOnce(M) -> axum::response::Response
 where
@@ -30,4 +23,27 @@ where
         )
             .into_response()
     }
+}
+
+pub fn v1_models<S, T, U>(
+    service: S,
+) -> impl Future<Output = anyhow::Result<Response<schemas::List<schemas::Model>>>>
+where
+    S: Clone + Service<Request<T>, Response = Response<U>>,
+    S::Error: std::error::Error + Send + Sync + 'static,
+    T: Default + Body,
+    U: Default + Body,
+    U::Error: std::error::Error + Send + Sync + 'static,
+{
+    let service = ServiceBuilder::new()
+        .layer(http_extra::from_json::response::Layer::default())
+        .layer(http_extra::check_status::Layer::default())
+        .layer(http_extra::collect_body::response::Layer::default())
+        .layer(tower_http::follow_redirect::FollowRedirectLayer::new())
+        .service(service);
+    async move {
+        let request = Request::get("/v1/models").body(T::default())?;
+        Ok(service.oneshot(request).await?)
+    }
+    .inspect_err(|e: &anyhow::Error| tracing::warn!(error = e.to_string()))
 }

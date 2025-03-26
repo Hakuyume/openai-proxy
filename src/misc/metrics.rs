@@ -11,19 +11,6 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tower::{Service, ServiceExt};
 
-pub fn install()
--> Result<metrics_exporter_prometheus::PrometheusHandle, metrics::SetRecorderError<impl Sized>> {
-    let prometheus_recorder =
-        metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
-    let prometheus_handle = prometheus_recorder.handle();
-    metrics_util::layers::Stack::new(prometheus_recorder)
-        .push(metrics_util::layers::PrefixLayer::new(env!(
-            "CARGO_BIN_NAME"
-        )))
-        .install()?;
-    Ok(prometheus_handle)
-}
-
 pub fn wrap_connector<C, F>(
     connector: C,
     f: F,

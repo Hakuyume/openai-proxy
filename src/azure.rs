@@ -1,93 +1,66 @@
 use axum::{Json, Router, extract, routing};
 use bytes::Bytes;
-use clap::{ArgAction, Parser};
 use futures::TryFutureExt;
 use http::{HeaderValue, Request, Response, StatusCode};
 use http_body_util::Full;
 use serde::Deserialize;
 use std::env;
-use std::future;
-use std::net::SocketAddr;
 use tower::ServiceExt;
-use tower::util::BoxCloneSyncService;
 
-#[derive(Parser)]
-pub(super) struct Args {
-    #[clap(long)]
-    bind: SocketAddr,
-    #[clap(long)]
+#[derive(Clone, Debug, Deserialize)]
+pub(super) struct Config {
     resource: String,
-    #[clap(long, action = ArgAction::Append)]
-    deployment: Vec<String>,
-    #[clap(long, default_value = "2024-10-21")]
+    api_key: String,
+    deployment: String,
+    #[serde(default = "default_api_version")]
     api_version: String,
+    #[serde(default)]
+    models: Vec<crate::misc::schemas::Model>,
 }
 
-pub(super) async fn main(args: Args) -> anyhow::Result<()> {
-    let prometheus_handle = crate::misc::metrics::install()?;
+fn default_api_version() -> String {
+    "2024-10-21".to_owned()
+}
 
-    let mut connector = hyper_util::client::legacy::connect::HttpConnector::new();
-    connector.enforce_http(false);
-    let connector = crate::misc::metrics::wrap_connector(connector, |_, _| ());
-    let connector = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_tls_config(crate::misc::tls_config()?)
-        .https_or_http()
-        .enable_http1()
-        .enable_http2()
-        .wrap_connector(connector);
-    let service = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-        .build(connector);
-
-    let mut api_key = env::var("AZURE_OPENAI_API_KEY")?.parse::<HeaderValue>()?;
+pub(super) fn service(
+    pool: &crate::misc::pool::Pool<Full<Bytes>>,
+    config: Config,
+) -> anyhow::Result<Router> {
+    let mut api_key = env::var(config.api_key)?.parse::<HeaderValue>()?;
     api_key.set_sensitive(true);
 
     let state = State {
-        service: BoxCloneSyncService::new(service),
-        resource: args.resource,
-        api_version: args.api_version,
+        pool: pool.clone(),
+        resource: config.resource,
+        deployment: config.deployment,
+        api_version: config.api_version,
         api_key,
     };
 
-    let app = Router::new()
+    let service = Router::new()
         .route("/v1/models", routing::get(v1_models))
-        .with_state(args.deployment)
+        .with_state(config.models)
         .route("/v1/chat/completions", routing::post(tunnel))
         .with_state((state.clone(), "chat/completions"))
         .route("/v1/completions", routing::post(tunnel))
         .with_state((state.clone(), "completions"))
-        .layer(tower_http::trace::TraceLayer::new_for_http())
-        .route("/health", routing::get(|| future::ready(())))
-        .route(
-            "/metrics",
-            routing::get(move || future::ready(prometheus_handle.render())),
-        );
-
-    crate::misc::metrics::serve(app, args.bind).await?;
-    Ok(())
+        .route("/v1/embeddings", routing::post(tunnel))
+        .with_state((state.clone(), "embeddings"));
+    Ok(service)
 }
 
 #[derive(Clone)]
 struct State {
-    service: BoxCloneSyncService<
-        Request<Full<Bytes>>,
-        Response<hyper::body::Incoming>,
-        hyper_util::client::legacy::Error,
-    >,
+    pool: crate::misc::pool::Pool<Full<Bytes>>,
     resource: String,
     api_version: String,
+    deployment: String,
     api_key: HeaderValue,
 }
 
 async fn v1_models(
-    extract::State(deployment): extract::State<Vec<String>>,
+    extract::State(models): extract::State<Vec<crate::misc::schemas::Model>>,
 ) -> Json<crate::misc::schemas::List<crate::misc::schemas::Model>> {
-    let models = deployment
-        .into_iter()
-        .map(|id| crate::misc::schemas::Model {
-            id,
-            extra: serde_json::Map::new(),
-        })
-        .collect();
     Json(crate::misc::schemas::List { data: models })
 }
 
@@ -95,21 +68,12 @@ async fn tunnel(
     extract::State((state, path)): extract::State<(State, &'static str)>,
     mut parts: http::request::Parts,
     body: Bytes,
-) -> Result<Response<hyper::body::Incoming>, axum::response::Response> {
-    let model = {
-        #[derive(Deserialize)]
-        struct Body {
-            model: String,
-        }
-
-        serde_json::from_slice::<Body>(&body)
-            .map_err(crate::misc::map_err(StatusCode::BAD_REQUEST))?
-            .model
-    };
+) -> Result<Response<crate::misc::pool::Incoming>, axum::response::Response> {
+    const API_KEY: http::header::HeaderName = http::header::HeaderName::from_static("api-key");
 
     parts.uri = format!(
-        "https://{}.openai.azure.com/openai/deployments/{model}/{path}?api-version={}",
-        state.resource, state.api_version,
+        "https://{}.openai.azure.com/openai/deployments/{}/{path}?api-version={}",
+        state.resource, state.deployment, state.api_version,
     )
     .parse()
     .map_err(crate::misc::map_err(StatusCode::BAD_REQUEST))?;
@@ -118,15 +82,15 @@ async fn tunnel(
         http::header::AUTHORIZATION,
         http::header::CONNECTION,
         http::header::HOST,
-        http::header::UPGRADE,
+        API_KEY,
     ] {
         while parts.headers.remove(&name).is_some() {}
     }
-    parts.headers.insert("api-key", state.api_key);
-    tracing::info!(?parts);
+    parts.headers.insert(API_KEY, state.api_key);
 
     state
-        .service
+        .pool
+        .service(&crate::misc::pool::Options::default())
         .oneshot(Request::from_parts(parts, Full::new(body)))
         .map_err(crate::misc::map_err(StatusCode::BAD_GATEWAY))
         .await
