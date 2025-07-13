@@ -1,14 +1,9 @@
+mod aggregated_discovery_service;
+
 use clap::Parser;
-use futures::stream::BoxStream;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
-use tokio::sync::watch;
-use tonic_envoy::envoy::service::discovery::v3::aggregated_discovery_service_server::{
-    AggregatedDiscoveryService, AggregatedDiscoveryServiceServer,
-};
-use tonic_envoy::envoy::service::discovery::v3::{
-    DeltaDiscoveryRequest, DeltaDiscoveryResponse, DiscoveryRequest, DiscoveryResponse,
-};
+use std::time::Duration;
 
 #[derive(Parser)]
 struct Args {
@@ -26,49 +21,39 @@ async fn main() -> anyhow::Result<()> {
         .register_encoded_file_descriptor_set(tonic_envoy::FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
-    let (tx, rx) = watch::channel(Arc::default());
-    let resolver = Resolver { rx };
+    let (ads_tx, ads_service) = aggregated_discovery_service::service();
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            interval.tick().await;
+            let _ = ads_tx.send(Arc::new(aggregated_discovery_service::Config::new(
+                [("1.2.3.4".parse().unwrap(), 80, "a")],
+                "model",
+                "local_route",
+            )?));
+
+            interval.tick().await;
+            let _ = ads_tx.send(Arc::new(aggregated_discovery_service::Config::new(
+                [
+                    ("1.2.3.4".parse().unwrap(), 80, "a"),
+                    ("1.2.3.4".parse().unwrap(), 80, "b"),
+                    ("5.6.7.8".parse().unwrap(), 80, "b"),
+                ],
+                "model",
+                "local_route",
+            )?));
+        }
+        #[allow(unreachable_code)]
+        Ok::<_, prost::EncodeError>(())
+    });
 
     tonic::transport::Server::builder()
         .layer(tower_http::trace::TraceLayer::new_for_grpc())
         .add_service(reflection)
-        .add_service(AggregatedDiscoveryServiceServer::new(resolver.clone()))
+        .add_service(ads_service)
         .serve((Ipv4Addr::UNSPECIFIED, args.port).into())
         .await?;
 
     Ok(())
-}
-
-#[derive(Clone)]
-struct Resolver {
-    rx: watch::Receiver<Arc<[Upstream]>>,
-}
-
-#[derive(Debug)]
-struct Upstream {
-    uri: http::Uri,
-    ip: IpAddr,
-}
-
-#[tonic::async_trait]
-impl AggregatedDiscoveryService for Resolver {
-    type StreamAggregatedResourcesStream =
-        BoxStream<'static, Result<DiscoveryResponse, tonic::Status>>;
-    async fn stream_aggregated_resources(
-        &self,
-        request: tonic::Request<tonic::Streaming<DiscoveryRequest>>,
-    ) -> Result<tonic::Response<Self::StreamAggregatedResourcesStream>, tonic::Status> {
-        let mut rx = self.rx.clone();
-        todo!()
-    }
-
-    type DeltaAggregatedResourcesStream =
-        BoxStream<'static, Result<DeltaDiscoveryResponse, tonic::Status>>;
-    async fn delta_aggregated_resources(
-        &self,
-        request: tonic::Request<tonic::Streaming<DeltaDiscoveryRequest>>,
-    ) -> Result<tonic::Response<Self::DeltaAggregatedResourcesStream>, tonic::Status> {
-        let mut rx = self.rx.clone();
-        todo!()
-    }
 }

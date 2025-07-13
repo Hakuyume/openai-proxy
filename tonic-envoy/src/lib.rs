@@ -5,6 +5,11 @@
 
 pub mod envoy {
     pub mod config {
+        pub mod accesslog {
+            pub mod v3 {
+                tonic::include_proto!("envoy.config.accesslog.v3");
+            }
+        }
         pub mod cluster {
             pub mod v3 {
                 tonic::include_proto!("envoy.config.cluster.v3");
@@ -25,6 +30,38 @@ pub mod envoy {
                 tonic::include_proto!("envoy.config.route.v3");
             }
         }
+        pub mod trace {
+            pub mod v3 {
+                tonic::include_proto!("envoy.config.trace.v3");
+            }
+        }
+    }
+    pub mod data {
+        pub mod accesslog {
+            pub mod v3 {
+                tonic::include_proto!("envoy.data.accesslog.v3");
+            }
+        }
+    }
+    pub mod extensions {
+        pub mod filters {
+            pub mod network {
+                pub mod http_connection_manager {
+                    pub mod v3 {
+                        tonic::include_proto!(
+                            "envoy.extensions.filters.network.http_connection_manager.v3"
+                        );
+                    }
+                }
+            }
+        }
+        pub mod upstreams {
+            pub mod http {
+                pub mod v3 {
+                    tonic::include_proto!("envoy.extensions.upstreams.http.v3");
+                }
+            }
+        }
     }
     pub mod service {
         pub mod discovery {
@@ -34,6 +71,11 @@ pub mod envoy {
         }
     }
     pub mod r#type {
+        pub mod http {
+            pub mod v3 {
+                tonic::include_proto!("envoy.r#type.http.v3");
+            }
+        }
         pub mod matcher {
             pub mod v3 {
                 tonic::include_proto!("envoy.r#type.matcher.v3");
