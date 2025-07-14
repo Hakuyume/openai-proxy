@@ -1,5 +1,5 @@
 [workspace]
-members = ["openai-proxy-resolver", "tonic-envoy"]
+members = ["openai-proxy-control-plane", "tonic-envoy"]
 resolver = "3"
 
 [workspace.dependencies]

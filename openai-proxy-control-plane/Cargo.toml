@@ -1,5 +1,5 @@
 [package]
-name = "openai-proxy-resolver"
+name = "openai-proxy-control-plane"
 version = "0.1.0"
 edition = "2024"
 
