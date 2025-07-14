@@ -1,4 +1,4 @@
-name: build
+name: cargo
 
 on:
   push:
@@ -25,6 +25,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - run: sudo apt-get install --no-install-recommends --yes protobuf-compiler
       - run: cargo clippy --locked -- --deny=warnings
   cargo-build:
     runs-on: ubuntu-latest
@@ -40,7 +41,7 @@ jobs:
             ~/.cargo/git/db/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: |
-          sudo apt-get install --no-install-recommends --yes musl-tools
+          sudo apt-get install --no-install-recommends --yes musl-tools protobuf-compiler
           rustup target add x86_64-unknown-linux-musl
           cargo build --locked --release --target=x86_64-unknown-linux-musl
       - uses: actions/upload-artifact@v4
