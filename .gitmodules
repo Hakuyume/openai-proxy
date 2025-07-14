@@ -1,0 +1,12 @@
+[submodule "bufbuild/protoc-gen-validate"]
+	path = tonic-envoy/protoc-gen-validate
+	url = https://github.com/bufbuild/protoc-gen-validate.git
+[submodule "cncf/xds"]
+	path = tonic-envoy/xds
+	url = https://github.com/cncf/xds.git
+[submodule "envoyproxy/envoy"]
+	path = tonic-envoy/envoy
+	url = https://github.com/envoyproxy/envoy.git
+[submodule "googleapis/api-common-protos"]
+	path = tonic-envoy/api-common-protos
+	url = https://github.com/googleapis/api-common-protos.git
