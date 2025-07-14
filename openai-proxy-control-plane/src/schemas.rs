@@ -10,6 +10,6 @@ pub(crate) struct List<T> {
 #[serde(tag = "object", rename = "model")]
 pub(crate) struct Model {
     pub(crate) id: String,
-    #[serde(flatten)]
-    pub(crate) extra: serde_json::Map<String, serde_json::Value>,
+    #[serde(flatten, skip_serializing)]
+    _extra: serde_json::Map<String, serde_json::Value>,
 }
