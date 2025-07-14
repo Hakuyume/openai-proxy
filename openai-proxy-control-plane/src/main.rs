@@ -31,16 +31,23 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
+    let reflection_service = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
+        .register_encoded_file_descriptor_set(tonic_envoy::FILE_DESCRIPTOR_SET)
+        .build_v1()?;
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let (mut ads_reporter, ads_service) = aggregated_discovery_service::service();
+
+    health_reporter
+        .set_serving::<aggregated_discovery_service::Service>()
+        .await;
 
     futures::future::try_join(
         async {
-            let reflection = tonic_reflection::server::Builder::configure()
-                .register_encoded_file_descriptor_set(tonic_envoy::FILE_DESCRIPTOR_SET)
-                .build_v1()?;
             tonic::transport::Server::builder()
                 .layer(tower_http::trace::TraceLayer::new_for_grpc())
-                .add_service(reflection)
+                .add_service(reflection_service)
+                .add_service(health_service)
                 .add_service(ads_service)
                 .serve((Ipv4Addr::UNSPECIFIED, args.port).into())
                 .await?;

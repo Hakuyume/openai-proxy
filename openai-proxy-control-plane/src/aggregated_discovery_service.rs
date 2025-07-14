@@ -12,7 +12,8 @@ use tonic_envoy::envoy::service::discovery::v3::aggregated_discovery_service_ser
 };
 use uuid::Uuid;
 
-pub(crate) fn service() -> (Reporter, AggregatedDiscoveryServiceServer<Server>) {
+pub(crate) type Service = AggregatedDiscoveryServiceServer<Server>;
+pub(crate) fn service() -> (Reporter, Service) {
     let (tx, rx) = watch::channel(None);
     (
         Reporter { tx, state: None },

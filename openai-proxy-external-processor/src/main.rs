@@ -24,13 +24,21 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    let reflection = tonic_reflection::server::Builder::configure()
+    let reflection_service = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(tonic_envoy::FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+
+    health_reporter
+        .set_serving::<ExternalProcessorServer<Server>>()
+        .await;
+
     tonic::transport::Server::builder()
         .layer(tower_http::trace::TraceLayer::new_for_grpc())
-        .add_service(reflection)
+        .add_service(reflection_service)
+        .add_service(health_service)
         .add_service(ExternalProcessorServer::new(Server))
         .serve((Ipv4Addr::UNSPECIFIED, args.port).into())
         .await?;
