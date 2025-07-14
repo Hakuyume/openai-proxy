@@ -8,6 +8,7 @@ use sha2::{Digest, Sha224};
 use std::collections::{BTreeSet, HashMap};
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
 use tonic_envoy::envoy::config::cluster::v3 as cluster_v3;
 use tonic_envoy::envoy::config::core::v3 as core_v3;
 use tonic_envoy::envoy::config::endpoint::v3 as endpoint_v3;
@@ -23,6 +24,8 @@ struct Args {
     upstream: Vec<resolver::Upstream>,
     #[clap(long)]
     route_config_name: String,
+    #[clap(long, value_parser = humantime::parse_duration)]
+    timeout: Option<Duration>,
 }
 
 #[tokio::main]
@@ -71,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
                     upstream: &args.upstream,
                     state: &state,
                     route_config_name: &args.route_config_name,
+                    timeout: args.timeout,
                 };
                 ads_reporter.update(aggregated_discovery_service::State {
                     clusters: generator.clusters()?,
@@ -88,6 +92,7 @@ struct Generator<'a> {
     upstream: &'a [resolver::Upstream],
     state: &'a HashMap<usize, Vec<(IpAddr, Vec<schemas::Model>)>>,
     route_config_name: &'a String,
+    timeout: Option<Duration>,
 }
 
 impl Generator<'_> {
@@ -336,6 +341,7 @@ impl Generator<'_> {
                         },
                     ),
                 ),
+                timeout: self.timeout.map(|timeout| timeout.try_into().unwrap()),
                 ..route_v3::RouteAction::default()
             })),
             ..route_v3::Route::default()

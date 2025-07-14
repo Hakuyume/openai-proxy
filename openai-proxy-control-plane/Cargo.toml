@@ -12,6 +12,7 @@ hickory-resolver.workspace = true
 http.workspace = true
 http-body-util.workspace = true
 http-serde.workspace = true
+humantime.workspace = true
 humantime-serde.workspace = true
 hyper-rustls = { workspace = true, features = ["http1", "http2", "webpki-roots"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio"] }
