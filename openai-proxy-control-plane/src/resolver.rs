@@ -54,7 +54,7 @@ impl std::str::FromStr for Upstream {
 
 pub(crate) struct Resolver {
     tls_config: rustls::ClientConfig,
-    resolver: hickory_resolver::TokioAsyncResolver,
+    resolver: hickory_resolver::TokioResolver,
 }
 
 impl Resolver {
@@ -71,7 +71,12 @@ impl Resolver {
             opts.ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
             opts.cache_size = 0;
             opts.try_tcp_on_error = true;
-            hickory_resolver::TokioAsyncResolver::tokio(config, opts)
+            hickory_resolver::TokioResolver::builder_with_config(
+                config,
+                hickory_resolver::name_server::TokioConnectionProvider::default(),
+            )
+            .with_options(opts)
+            .build()
         };
 
         Ok(Self {
