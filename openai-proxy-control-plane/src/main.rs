@@ -222,7 +222,7 @@ impl Generator<'_> {
                 .chain(
                     model_ids
                         .into_iter()
-                        .map(|model_id| self.route_post(model_id.clone())),
+                        .map(|model_id| self.route_model(model_id.clone())),
                 )
                 .collect::<Result<_, _>>()?,
             ..route_v3::VirtualHost::default()
@@ -283,7 +283,7 @@ impl Generator<'_> {
         })
     }
 
-    fn route_post(&self, model_id: String) -> anyhow::Result<route_v3::Route> {
+    fn route_model(&self, model_id: String) -> anyhow::Result<route_v3::Route> {
         let mut endpoints = self
             .state
             .iter()
@@ -301,38 +301,20 @@ impl Generator<'_> {
 
         Ok(route_v3::Route {
             r#match: Some(route_v3::RouteMatch {
-                headers: vec![
-                    route_v3::HeaderMatcher {
-                        name: ":method".to_owned(),
-                        header_match_specifier: Some(
-                            route_v3::header_matcher::HeaderMatchSpecifier::StringMatch(
-                                matcher_v3::StringMatcher {
-                                    match_pattern: Some(
-                                        matcher_v3::string_matcher::MatchPattern::Exact(
-                                            "POST".to_owned(),
-                                        ),
-                                    ),
-                                    ..matcher_v3::StringMatcher::default()
-                                },
-                            ),
+                headers: vec![route_v3::HeaderMatcher {
+                    name: self.header_name.clone(),
+                    header_match_specifier: Some(
+                        route_v3::header_matcher::HeaderMatchSpecifier::StringMatch(
+                            matcher_v3::StringMatcher {
+                                match_pattern: Some(
+                                    matcher_v3::string_matcher::MatchPattern::Exact(model_id),
+                                ),
+                                ..matcher_v3::StringMatcher::default()
+                            },
                         ),
-                        ..route_v3::HeaderMatcher::default()
-                    },
-                    route_v3::HeaderMatcher {
-                        name: self.header_name.clone(),
-                        header_match_specifier: Some(
-                            route_v3::header_matcher::HeaderMatchSpecifier::StringMatch(
-                                matcher_v3::StringMatcher {
-                                    match_pattern: Some(
-                                        matcher_v3::string_matcher::MatchPattern::Exact(model_id),
-                                    ),
-                                    ..matcher_v3::StringMatcher::default()
-                                },
-                            ),
-                        ),
-                        ..route_v3::HeaderMatcher::default()
-                    },
-                ],
+                    ),
+                    ..route_v3::HeaderMatcher::default()
+                }],
                 path_specifier: Some(route_v3::route_match::PathSpecifier::Prefix("/".to_owned())),
                 ..route_v3::RouteMatch::default()
             }),
