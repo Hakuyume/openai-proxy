@@ -45,6 +45,13 @@ pub mod envoy {
     }
     pub mod extensions {
         pub mod filters {
+            pub mod http {
+                pub mod ext_proc {
+                    pub mod v3 {
+                        tonic::include_proto!("envoy.extensions.filters.http.ext_proc.v3");
+                    }
+                }
+            }
             pub mod network {
                 pub mod http_connection_manager {
                     pub mod v3 {
@@ -67,6 +74,11 @@ pub mod envoy {
         pub mod discovery {
             pub mod v3 {
                 tonic::include_proto!("envoy.service.discovery.v3");
+            }
+        }
+        pub mod ext_proc {
+            pub mod v3 {
+                tonic::include_proto!("envoy.service.ext_proc.v3");
             }
         }
     }

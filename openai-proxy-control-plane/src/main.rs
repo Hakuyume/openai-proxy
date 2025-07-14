@@ -23,8 +23,6 @@ struct Args {
     upstream: Vec<resolver::Upstream>,
     #[clap(long)]
     route_config_name: String,
-    #[clap(long)]
-    header_name: String,
 }
 
 #[tokio::main]
@@ -40,7 +38,6 @@ async fn main() -> anyhow::Result<()> {
             let reflection = tonic_reflection::server::Builder::configure()
                 .register_encoded_file_descriptor_set(tonic_envoy::FILE_DESCRIPTOR_SET)
                 .build_v1()?;
-
             tonic::transport::Server::builder()
                 .layer(tower_http::trace::TraceLayer::new_for_grpc())
                 .add_service(reflection)
@@ -67,7 +64,6 @@ async fn main() -> anyhow::Result<()> {
                     upstream: &args.upstream,
                     state: &state,
                     route_config_name: &args.route_config_name,
-                    header_name: &args.header_name,
                 };
                 ads_reporter.update(aggregated_discovery_service::State {
                     clusters: generator.clusters()?,
@@ -85,7 +81,6 @@ struct Generator<'a> {
     upstream: &'a [resolver::Upstream],
     state: &'a HashMap<usize, Vec<(IpAddr, Vec<schemas::Model>)>>,
     route_config_name: &'a String,
-    header_name: &'a String,
 }
 
 impl Generator<'_> {
@@ -302,7 +297,7 @@ impl Generator<'_> {
         Ok(route_v3::Route {
             r#match: Some(route_v3::RouteMatch {
                 headers: vec![route_v3::HeaderMatcher {
-                    name: self.header_name.clone(),
+                    name: openai_proxy_common::MODEL_HEADER.to_owned(),
                     header_match_specifier: Some(
                         route_v3::header_matcher::HeaderMatchSpecifier::StringMatch(
                             matcher_v3::StringMatcher {
