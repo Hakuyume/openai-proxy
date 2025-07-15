@@ -1282,10 +1282,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
 
 [[package]]
-name = "openai-proxy-common"
-version = "0.1.0"
-
-[[package]]
 name = "openai-proxy-control-plane"
 version = "0.1.0"
 dependencies = [
@@ -1301,7 +1297,6 @@ dependencies = [
  "humantime-serde",
  "hyper-rustls",
  "hyper-util",
- "openai-proxy-common",
  "prost",
  "prost-types",
  "rustls",
@@ -1321,26 +1316,6 @@ dependencies = [
  "tracing-futures",
  "tracing-subscriber",
  "uuid",
-]
-
-[[package]]
-name = "openai-proxy-external-processor"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "futures",
- "openai-proxy-common",
- "serde",
- "serde_json",
- "tokio",
- "tonic",
- "tonic-envoy",
- "tonic-health",
- "tonic-reflection",
- "tower-http",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

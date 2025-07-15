@@ -24,6 +24,8 @@ struct Args {
     upstream: Vec<resolver::Upstream>,
     #[clap(long)]
     route_config_name: String,
+    #[clap(long)]
+    metadata_namespace: String,
     #[clap(long, value_parser = humantime::parse_duration)]
     timeout: Option<Duration>,
 }
@@ -74,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
                     upstream: &args.upstream,
                     state: &state,
                     route_config_name: &args.route_config_name,
+                    metadata_namespace: &args.metadata_namespace,
                     timeout: args.timeout,
                 };
                 ads_reporter.update(aggregated_discovery_service::State {
@@ -92,6 +95,7 @@ struct Generator<'a> {
     upstream: &'a [resolver::Upstream],
     state: &'a HashMap<usize, Vec<(IpAddr, Vec<schemas::Model>)>>,
     route_config_name: &'a String,
+    metadata_namespace: &'a String,
     timeout: Option<Duration>,
 }
 
@@ -248,6 +252,9 @@ impl Generator<'_> {
 
         Ok(route_v3::Route {
             r#match: Some(route_v3::RouteMatch {
+                path_specifier: Some(route_v3::route_match::PathSpecifier::Path(
+                    "/v1/models".to_owned(),
+                )),
                 headers: vec![route_v3::HeaderMatcher {
                     name: ":method".to_owned(),
                     header_match_specifier: Some(
@@ -264,9 +271,6 @@ impl Generator<'_> {
                     ),
                     ..route_v3::HeaderMatcher::default()
                 }],
-                path_specifier: Some(route_v3::route_match::PathSpecifier::Path(
-                    "/v1/models".to_owned(),
-                )),
                 ..route_v3::RouteMatch::default()
             }),
             response_headers_to_add: vec![core_v3::HeaderValueOption {
@@ -308,21 +312,26 @@ impl Generator<'_> {
 
         Ok(route_v3::Route {
             r#match: Some(route_v3::RouteMatch {
-                headers: vec![route_v3::HeaderMatcher {
-                    name: openai_proxy_common::MODEL_HEADER.to_owned(),
-                    header_match_specifier: Some(
-                        route_v3::header_matcher::HeaderMatchSpecifier::StringMatch(
+                path_specifier: Some(route_v3::route_match::PathSpecifier::Prefix("/".to_owned())),
+                dynamic_metadata: vec![matcher_v3::MetadataMatcher {
+                    filter: self.metadata_namespace.clone(),
+                    path: vec![matcher_v3::metadata_matcher::PathSegment {
+                        segment: Some(matcher_v3::metadata_matcher::path_segment::Segment::Key(
+                            "model".to_owned(),
+                        )),
+                    }],
+                    value: Some(matcher_v3::ValueMatcher {
+                        match_pattern: Some(matcher_v3::value_matcher::MatchPattern::StringMatch(
                             matcher_v3::StringMatcher {
                                 match_pattern: Some(
                                     matcher_v3::string_matcher::MatchPattern::Exact(model_id),
                                 ),
                                 ..matcher_v3::StringMatcher::default()
                             },
-                        ),
-                    ),
-                    ..route_v3::HeaderMatcher::default()
+                        )),
+                    }),
+                    ..matcher_v3::MetadataMatcher::default()
                 }],
-                path_specifier: Some(route_v3::route_match::PathSpecifier::Prefix("/".to_owned())),
                 ..route_v3::RouteMatch::default()
             }),
             action: Some(route_v3::route::Action::Route(route_v3::RouteAction {
