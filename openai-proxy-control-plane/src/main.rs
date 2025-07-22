@@ -28,6 +28,8 @@ struct Args {
     metadata_namespace: String,
     #[clap(long, value_parser = humantime::parse_duration)]
     timeout: Option<Duration>,
+    #[clap(long, value_parser = humantime::parse_duration)]
+    idle_timeout: Option<Duration>,
 }
 
 #[tokio::main]
@@ -78,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
                     route_config_name: &args.route_config_name,
                     metadata_namespace: &args.metadata_namespace,
                     timeout: args.timeout,
+                    idle_timeout: args.idle_timeout,
                 };
                 ads_reporter.update(aggregated_discovery_service::State {
                     clusters: generator.clusters()?,
@@ -97,6 +100,7 @@ struct Generator<'a> {
     route_config_name: &'a String,
     metadata_namespace: &'a String,
     timeout: Option<Duration>,
+    idle_timeout: Option<Duration>,
 }
 
 impl Generator<'_> {
@@ -350,7 +354,8 @@ impl Generator<'_> {
                         },
                     ),
                 ),
-                timeout: self.timeout.map(|timeout| timeout.try_into().unwrap()),
+                timeout: self.timeout.map(TryInto::try_into).transpose()?,
+                idle_timeout: self.idle_timeout.map(TryInto::try_into).transpose()?,
                 ..route_v3::RouteAction::default()
             })),
             ..route_v3::Route::default()
