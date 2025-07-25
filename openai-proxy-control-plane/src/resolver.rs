@@ -7,6 +7,7 @@ use std::iter;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use tower::ServiceExt;
 use tracing_futures::Instrument;
 
 #[derive(Clone, Debug)]
@@ -57,6 +58,11 @@ pub(crate) struct Resolver {
     resolver: hickory_resolver::TokioResolver,
 }
 
+pub(crate) struct Endpoint {
+    pub(crate) ip: IpAddr,
+    pub(crate) models: Vec<crate::schemas::Model>,
+}
+
 impl Resolver {
     pub(crate) fn new() -> anyhow::Result<Self> {
         let tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(
@@ -88,7 +94,7 @@ impl Resolver {
     pub(crate) fn watch<'a>(
         &'a self,
         upstream: &'a Upstream,
-    ) -> impl Stream<Item = Vec<(IpAddr, Vec<crate::schemas::Model>)>> + Send + 'a {
+    ) -> impl Stream<Item = Vec<Endpoint>> + Send + 'a {
         futures::stream::unfold(
             tokio::time::interval(upstream.interval),
             move |mut interval| async move {
@@ -119,7 +125,7 @@ impl Resolver {
                                     Vec::new()
                                 }
                             };
-                            (ip, models)
+                            Endpoint { ip, models }
                         })
                         .instrument(tracing::info_span!("list_models", ?ip))
                 }))
@@ -135,6 +141,34 @@ impl Resolver {
         upstream: &Upstream,
         ip: IpAddr,
     ) -> anyhow::Result<crate::schemas::List<crate::schemas::Model>> {
+        let service = self.service(upstream, ip);
+        let response = tokio::time::timeout(upstream.timeout.unwrap_or(Duration::MAX), async {
+            let request =
+                http::Request::get(format!("{}v1/models", upstream.uri)).body(String::new())?;
+            let response = service.oneshot(request).await?;
+            let (parts, body) = response.into_parts();
+            let body = body.collect().await?.to_bytes();
+            anyhow::Ok(http::Response::from_parts(parts, body))
+        })
+        .await??;
+        if response.status().is_success() {
+            Ok(serde_json::from_slice(response.body())?)
+        } else {
+            Err(anyhow::format_err!("response = {response:?}"))
+        }
+    }
+
+    fn service(
+        &self,
+        upstream: &Upstream,
+        ip: IpAddr,
+    ) -> impl tower::Service<
+        http::Request<String>,
+        Response = http::Response<hyper::body::Incoming>,
+        Error = hyper_util::client::legacy::Error,
+        Future: Send + 'static,
+    > + Send
+    + 'static {
         let mut connector =
             hyper_util::client::legacy::connect::HttpConnector::new_with_resolver({
                 let f = futures::future::ok::<_, Infallible>(iter::once((ip, 0).into()));
@@ -147,25 +181,8 @@ impl Resolver {
             .enable_http1()
             .enable_http2()
             .wrap_connector(connector);
-        let client =
-            hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-                .http2_only(upstream.http2_only)
-                .build::<_, String>(connector);
-
-        let response = tokio::time::timeout(upstream.timeout.unwrap_or(Duration::MAX), async {
-            let response = client
-                .get(format!("{}v1/models", upstream.uri).parse()?)
-                .await?;
-            let (parts, body) = response.into_parts();
-            let body = body.collect().await?.to_bytes();
-            anyhow::Ok(http::Response::from_parts(parts, body))
-        })
-        .await??;
-
-        if response.status().is_success() {
-            Ok(serde_json::from_slice(response.body())?)
-        } else {
-            Err(anyhow::format_err!("response = {response:?}"))
-        }
+        hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+            .http2_only(upstream.http2_only)
+            .build(connector)
     }
 }

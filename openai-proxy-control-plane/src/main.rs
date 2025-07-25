@@ -96,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
 
 struct Generator<'a> {
     upstream: &'a [resolver::Upstream],
-    state: &'a HashMap<usize, Vec<(IpAddr, Vec<schemas::Model>)>>,
+    state: &'a HashMap<usize, Vec<resolver::Endpoint>>,
     route_config_name: &'a String,
     metadata_namespace: &'a String,
     timeout: Option<Duration>,
@@ -118,10 +118,10 @@ impl Generator<'_> {
             .enumerate()
             .flat_map(|(i, upstream)| {
                 let mut endpoints = self.state.get(&i).into_iter().flatten().collect::<Vec<_>>();
-                endpoints.sort_unstable_by_key(|(ip, _)| *ip);
+                endpoints.sort_unstable_by_key(|endpoint| endpoint.ip);
                 endpoints
                     .into_iter()
-                    .map(move |(ip, _)| Self::cluster(i, upstream, *ip))
+                    .map(move |endpoint| Self::cluster(i, upstream, endpoint.ip))
             })
             .collect::<Result<Vec<_>, _>>()?;
         clusters.sort_unstable_by_key(|cluster| cluster.name.clone());
@@ -227,7 +227,7 @@ impl Generator<'_> {
             .state
             .values()
             .flatten()
-            .flat_map(|(_, models)| models)
+            .flat_map(|endpoint| &endpoint.models)
             .map(|model| &model.id)
             .collect::<BTreeSet<_>>();
         Ok(route_v3::VirtualHost {
@@ -249,7 +249,7 @@ impl Generator<'_> {
             .state
             .values()
             .flatten()
-            .flat_map(|(_, models)| models)
+            .flat_map(|endpoint| &endpoint.models)
             .collect::<Vec<_>>();
         data.sort_unstable_by_key(|model| &model.id);
         let body = serde_json::to_string(&schemas::List { data })?;
@@ -304,11 +304,12 @@ impl Generator<'_> {
             .iter()
             .flat_map(|(i, endpoints)| {
                 let model_id = &model_id;
-                endpoints.iter().filter_map(move |(ip, models)| {
-                    models
+                endpoints.iter().filter_map(move |endpoint| {
+                    endpoint
+                        .models
                         .iter()
                         .any(|model| &model.id == model_id)
-                        .then_some((*i, *ip))
+                        .then_some((*i, endpoint.ip))
                 })
             })
             .collect::<Vec<_>>();

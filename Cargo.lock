@@ -1295,6 +1295,7 @@ dependencies = [
  "http-serde",
  "humantime",
  "humantime-serde",
+ "hyper",
  "hyper-rustls",
  "hyper-util",
  "prost",
