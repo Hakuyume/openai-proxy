@@ -1,7 +1,9 @@
 use futures::{FutureExt, Stream};
 use http_body_util::BodyExt;
 use hyper_rustls::ConfigBuilderExt;
+use nom::Finish;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::iter;
 use std::net::IpAddr;
@@ -61,6 +63,7 @@ pub(crate) struct Resolver {
 pub(crate) struct Endpoint {
     pub(crate) ip: IpAddr,
     pub(crate) models: Vec<crate::schemas::Model>,
+    pub(crate) active_requests: u64,
 }
 
 impl Resolver {
@@ -116,18 +119,20 @@ impl Resolver {
                     .flatten()
                 };
                 let endpoints = futures::future::join_all(lookup_ip.map(|ip| {
-                    self.list_models(upstream, ip)
-                        .map(move |output| {
-                            let models = match output {
-                                Ok(crate::schemas::List { data }) => data,
-                                Err(e) => {
-                                    tracing::warn!(error = e.to_string());
-                                    Vec::new()
-                                }
-                            };
-                            Endpoint { ip, models }
-                        })
-                        .instrument(tracing::info_span!("list_models", ?ip))
+                    futures::future::join(
+                        self.list_models(upstream, ip).map(|output| {
+                            output
+                                .map(|crate::schemas::List { data }| data)
+                                .unwrap_or_default()
+                        }),
+                        self.active_requests_vllm(upstream, ip)
+                            .map(Result::unwrap_or_default),
+                    )
+                    .map(move |(models, active_requests)| Endpoint {
+                        ip,
+                        models,
+                        active_requests,
+                    })
                 }))
                 .await;
                 Some((endpoints, interval))
@@ -136,6 +141,7 @@ impl Resolver {
         .instrument(tracing::info_span!("watch", ?upstream))
     }
 
+    #[tracing::instrument(err, skip(self))]
     async fn list_models(
         &self,
         upstream: &Upstream,
@@ -153,6 +159,52 @@ impl Resolver {
         .await??;
         if response.status().is_success() {
             Ok(serde_json::from_slice(response.body())?)
+        } else {
+            Err(anyhow::format_err!("response = {response:?}"))
+        }
+    }
+
+    #[tracing::instrument(err, skip(self))]
+    async fn active_requests_vllm(&self, upstream: &Upstream, ip: IpAddr) -> anyhow::Result<u64> {
+        let service = self.service(upstream, ip);
+        let response = tokio::time::timeout(upstream.timeout.unwrap_or(Duration::MAX), async {
+            let request =
+                http::Request::get(format!("{}metrics", upstream.uri)).body(String::new())?;
+            let response = service.oneshot(request).await?;
+            let (parts, body) = response.into_parts();
+            let body = body.collect().await?.to_bytes();
+            anyhow::Ok(http::Response::from_parts(parts, body))
+        })
+        .await??;
+        if response.status().is_success() {
+            let mut body = str::from_utf8(response.body())?.replace("\r\n", "\n");
+            body.push_str("# EOF\n");
+            let (_, exposition) = openmetrics_nom::exposition(body.as_str())
+                .finish()
+                .map_err(nom::error::Error::<&_>::cloned)?;
+            let (_, metricset) = &exposition.metricset;
+            let samples = metricset
+                .metricfamily
+                .iter()
+                .flat_map(|(_, metricfamily)| &metricfamily.metric)
+                .flat_map(|(_, metric)| &metric.sample)
+                .filter_map(|(_, sample)| {
+                    Some((sample.metricname, sample.number.parse::<f64>().ok()?))
+                })
+                .fold(HashMap::<_, f64>::new(), |mut samples, (k, v)| {
+                    *samples.entry(k).or_default() += v;
+                    samples
+                });
+
+            let num_requests_running = samples
+                .get("vllm:num_requests_running")
+                .copied()
+                .unwrap_or_default();
+            let num_requests_waiting = samples
+                .get("vllm:num_requests_waiting")
+                .copied()
+                .unwrap_or_default();
+            Ok((num_requests_running + num_requests_waiting) as _)
         } else {
             Err(anyhow::format_err!("response = {response:?}"))
         }

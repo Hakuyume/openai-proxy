@@ -309,11 +309,16 @@ impl Generator<'_> {
                         .models
                         .iter()
                         .any(|model| &model.id == model_id)
-                        .then_some((*i, endpoint.ip))
+                        .then_some((*i, endpoint.ip, endpoint.active_requests))
                 })
             })
             .collect::<Vec<_>>();
         endpoints.sort_unstable();
+        let active_requests_max = endpoints
+            .iter()
+            .map(|(_, _, active_requests)| *active_requests)
+            .max()
+            .unwrap_or_default();
 
         Ok(route_v3::Route {
             r#match: Some(route_v3::RouteMatch {
@@ -345,10 +350,15 @@ impl Generator<'_> {
                         route_v3::WeightedCluster {
                             clusters: endpoints
                                 .into_iter()
-                                .map(|(i, ip)| route_v3::weighted_cluster::ClusterWeight {
-                                    name: Self::cluster_name(i, ip),
-                                    weight: Some(1),
-                                    ..route_v3::weighted_cluster::ClusterWeight::default()
+                                .map(|(i, ip, active_requests)| {
+                                    route_v3::weighted_cluster::ClusterWeight {
+                                        name: Self::cluster_name(i, ip),
+                                        weight: Some(
+                                            ((1 + active_requests_max) / (1 + active_requests))
+                                                as _,
+                                        ),
+                                        ..route_v3::weighted_cluster::ClusterWeight::default()
+                                    }
                                 })
                                 .collect(),
                             ..route_v3::WeightedCluster::default()
