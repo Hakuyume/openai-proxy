@@ -1,13 +1,8 @@
 use futures::{FutureExt, Stream};
 use http_body_util::BodyExt;
-use hyper_rustls::ConfigBuilderExt;
 use serde::Deserialize;
-use std::convert::Infallible;
-use std::iter;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::time::Duration;
-use tower::ServiceExt;
 use tracing_futures::Instrument;
 
 #[derive(Clone, Debug)]
@@ -60,18 +55,12 @@ pub(crate) struct Resolver {
 
 pub(crate) struct Endpoint {
     pub(crate) ip: IpAddr,
-    pub(crate) models: Vec<crate::schemas::Model>,
+    pub(crate) models: Vec<schemas::Model>,
 }
 
 impl Resolver {
     pub(crate) fn new() -> anyhow::Result<Self> {
-        let tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::aws_lc_rs::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()?
-        .with_webpki_roots()
-        .with_no_client_auth();
-
+        let tls_config = misc::hyper::tls_config()?;
         let resolver = {
             let (config, mut opts) = hickory_resolver::system_conf::read_system_conf()?;
             opts.ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
@@ -117,17 +106,12 @@ impl Resolver {
                 };
                 let endpoints = futures::future::join_all(lookup_ip.map(|ip| {
                     self.list_models(upstream, ip)
-                        .map(move |output| {
-                            let models = match output {
-                                Ok(crate::schemas::List { data }) => data,
-                                Err(e) => {
-                                    tracing::warn!(error = e.to_string());
-                                    Vec::new()
-                                }
-                            };
-                            Endpoint { ip, models }
+                        .map(|output| {
+                            output
+                                .map(|schemas::List { data }| data)
+                                .unwrap_or_default()
                         })
-                        .instrument(tracing::info_span!("list_models", ?ip))
+                        .map(move |models| Endpoint { ip, models })
                 }))
                 .await;
                 Some((endpoints, interval))
@@ -136,16 +120,18 @@ impl Resolver {
         .instrument(tracing::info_span!("watch", ?upstream))
     }
 
+    #[tracing::instrument(err, skip(self))]
     async fn list_models(
         &self,
         upstream: &Upstream,
         ip: IpAddr,
-    ) -> anyhow::Result<crate::schemas::List<crate::schemas::Model>> {
-        let service = self.service(upstream, ip);
+    ) -> anyhow::Result<schemas::List<schemas::Model>> {
+        let client =
+            misc::hyper::client::<String>(self.tls_config.clone(), Some(ip), upstream.http2_only);
         let response = tokio::time::timeout(upstream.timeout.unwrap_or(Duration::MAX), async {
-            let request =
-                http::Request::get(format!("{}v1/models", upstream.uri)).body(String::new())?;
-            let response = service.oneshot(request).await?;
+            let response = client
+                .get(format!("{}v1/models", upstream.uri).parse()?)
+                .await?;
             let (parts, body) = response.into_parts();
             let body = body.collect().await?.to_bytes();
             anyhow::Ok(http::Response::from_parts(parts, body))
@@ -156,33 +142,5 @@ impl Resolver {
         } else {
             Err(anyhow::format_err!("response = {response:?}"))
         }
-    }
-
-    fn service(
-        &self,
-        upstream: &Upstream,
-        ip: IpAddr,
-    ) -> impl tower::Service<
-        http::Request<String>,
-        Response = http::Response<hyper::body::Incoming>,
-        Error = hyper_util::client::legacy::Error,
-        Future: Send + 'static,
-    > + Send
-    + 'static {
-        let mut connector =
-            hyper_util::client::legacy::connect::HttpConnector::new_with_resolver({
-                let f = futures::future::ok::<_, Infallible>(iter::once((ip, 0).into()));
-                tower::service_fn(move |_| f.clone())
-            });
-        connector.enforce_http(false);
-        let connector = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_tls_config(self.tls_config.clone())
-            .https_or_http()
-            .enable_http1()
-            .enable_http2()
-            .wrap_connector(connector);
-        hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-            .http2_only(upstream.http2_only)
-            .build(connector)
     }
 }

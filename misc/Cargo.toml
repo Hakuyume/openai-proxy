@@ -1,0 +1,12 @@
+[package]
+name = "misc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+futures.workspace = true
+http-body.workspace = true
+hyper-rustls = { workspace = true, features = ["http1", "http2", "webpki-roots"] }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio"] }
+rustls.workspace = true
+tower = { workspace = true, features = ["util"] }
