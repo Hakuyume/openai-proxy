@@ -65,7 +65,7 @@ jobs:
       - run: |
           cat << 'EOD' > Dockerfile
           FROM busybox
-          COPY --chmod=755 openai-proxy-* /usr/local/bin/
+          COPY --chmod=755 control-plane /usr/local/bin/openai-proxy-control-plane
           EOD
       - uses: docker/login-action@v3
         with:

@@ -1,6 +1,5 @@
 mod aggregated_discovery_service;
 mod resolver;
-mod schemas;
 
 use clap::Parser;
 use futures::{StreamExt, TryFutureExt};
@@ -305,18 +304,22 @@ impl Generator<'_> {
             .flat_map(|(i, endpoints)| {
                 let model_id = &model_id;
                 endpoints.iter().filter_map(move |endpoint| {
-                    endpoint
+                    let pending = endpoint
                         .models
                         .iter()
-                        .any(|model| &model.id == model_id)
-                        .then_some((*i, endpoint.ip, endpoint.active_requests))
+                        .filter_map(|model| {
+                            (&model.id == model_id).then_some(model.pending.unwrap_or_default())
+                        })
+                        .collect::<Vec<_>>();
+                    (!pending.is_empty()).then_some((*i, endpoint.ip, pending))
                 })
             })
             .collect::<Vec<_>>();
         endpoints.sort_unstable();
-        let active_requests_max = endpoints
+        let pending_max = endpoints
             .iter()
-            .map(|(_, _, active_requests)| *active_requests)
+            .flat_map(|(_, _, pending)| pending)
+            .copied()
             .max()
             .unwrap_or_default();
 
@@ -350,16 +353,19 @@ impl Generator<'_> {
                         route_v3::WeightedCluster {
                             clusters: endpoints
                                 .into_iter()
-                                .map(|(i, ip, active_requests)| {
-                                    route_v3::weighted_cluster::ClusterWeight {
+                                .map(
+                                    |(i, ip, pending)| route_v3::weighted_cluster::ClusterWeight {
                                         name: Self::cluster_name(i, ip),
                                         weight: Some(
-                                            ((1 + active_requests_max) / (1 + active_requests))
+                                            pending
+                                                .into_iter()
+                                                .map(|pending| (1 + pending_max) / (1 + pending))
+                                                .sum::<u64>()
                                                 as _,
                                         ),
                                         ..route_v3::weighted_cluster::ClusterWeight::default()
-                                    }
-                                })
+                                    },
+                                )
                                 .collect(),
                             ..route_v3::WeightedCluster::default()
                         },
