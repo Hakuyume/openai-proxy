@@ -8,7 +8,8 @@ use http_body_util::BodyExt;
 use nom::Finish;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 
 #[derive(Parser)]
@@ -17,6 +18,8 @@ struct Args {
     port: u16,
     #[clap(long)]
     upstream: http::Uri,
+    #[clap(long, value_parser = humantime::parse_duration)]
+    ttl: Duration,
 }
 
 #[tokio::main]
@@ -32,7 +35,8 @@ async fn main() -> anyhow::Result<()> {
         .with_state(Arc::new(State {
             client,
             upstream: args.upstream,
-            cache: RwLock::new(HashMap::new()),
+            cache: Mutex::new(HashMap::new()),
+            ttl: args.ttl,
         }))
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
@@ -47,19 +51,22 @@ async fn main() -> anyhow::Result<()> {
 struct State {
     client: misc::hyper::Client<axum::body::Body>,
     upstream: http::Uri,
-    cache: RwLock<HashMap<&'static str, Bytes>>,
+    cache: Mutex<HashMap<&'static str, Cache>>,
+    ttl: Duration,
 }
+type Cache = Arc<tokio::sync::Mutex<Option<(Bytes, Instant)>>>;
 
 impl State {
     #[tracing::instrument(skip(self))]
     async fn get(&self, path: &'static str) -> Result<Bytes, axum::response::Response> {
-        let uri = format!("{}{path}", self.upstream.to_string().trim_end_matches('/'))
-            .parse::<http::Uri>()
-            .map_err(|e| {
-                tracing::error!(error = e.to_string());
-                (http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
-            })?;
         let f = async {
+            let instant = Instant::now();
+            let uri = format!("{}{path}", self.upstream.to_string().trim_end_matches('/'))
+                .parse::<http::Uri>()
+                .map_err(|e| {
+                    tracing::error!(error = e.to_string());
+                    (http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                })?;
             let response = self
                 .client
                 .get(uri)
@@ -69,30 +76,41 @@ impl State {
                 })
                 .await?;
             if response.status().is_success() {
-                response
+                let body = response
                     .collect()
                     .map_ok(http_body_util::Collected::to_bytes)
                     .map_err(|e| {
                         tracing::error!(error = e.to_string());
                         (http::StatusCode::BAD_GATEWAY, e.to_string()).into_response()
                     })
-                    .await
+                    .await?;
+                Ok((body, instant))
             } else {
                 Err(response.into_response())
             }
         };
-        match f.await {
-            Ok(v) => {
-                self.cache.write().unwrap().insert(path, v.clone());
-                Ok(v)
-            }
-            Err(e) => {
-                if let Some(v) = self.cache.read().unwrap().get(path).cloned() {
-                    Ok(v)
-                } else {
-                    Err(e)
+
+        let cache = self.cache.lock().unwrap().entry(path).or_default().clone();
+        let mut cache = cache.lock().await;
+        if let Some((body, instant)) = &*cache
+            && let elasped = instant.elapsed()
+            && elasped < self.ttl
+        {
+            if elasped < self.ttl * 4 / 5 {
+                Ok(body.clone())
+            } else {
+                match f.await {
+                    Ok((body, instant)) => {
+                        *cache = Some((body.clone(), instant));
+                        Ok(body)
+                    }
+                    Err(_) => Ok(body.clone()),
                 }
             }
+        } else {
+            let (body, instant) = f.await?;
+            *cache = Some((body.clone(), instant));
+            Ok(body)
         }
     }
 }

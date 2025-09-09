@@ -11,6 +11,7 @@ clap = { workspace = true, features = ["derive"] }
 futures.workspace = true
 http.workspace = true
 http-body-util.workspace = true
+humantime.workspace = true
 hyper.workspace = true
 misc.path = "../misc"
 nom.workspace = true
