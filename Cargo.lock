@@ -387,6 +387,7 @@ dependencies = [
  "misc",
  "prost",
  "prost-types",
+ "rand",
  "rustls",
  "schemas",
  "serde",

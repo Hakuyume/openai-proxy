@@ -1,8 +1,9 @@
 use futures::{FutureExt, Stream};
 use http_body_util::BodyExt;
+use rand::{Rng, SeedableRng};
 use serde::Deserialize;
 use std::net::IpAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing_futures::Instrument;
 
 #[derive(Clone, Debug)]
@@ -85,9 +86,14 @@ impl Resolver {
         upstream: &'a Upstream,
     ) -> impl Stream<Item = Vec<Endpoint>> + Send + 'a {
         futures::stream::unfold(
-            tokio::time::interval(upstream.interval),
-            move |mut interval| async move {
-                interval.tick().await;
+            (rand::rngs::StdRng::from_os_rng(), Instant::now()),
+            move |(mut rng, mut instant)| async move {
+                tokio::time::sleep_until(instant.into()).await;
+                let now = Instant::now();
+                while instant <= now {
+                    instant +=
+                        rng.random_range(upstream.interval * 4 / 5..=upstream.interval * 6 / 5);
+                }
                 let lookup_ip = {
                     if let Some(host) = upstream.uri.host() {
                         match self.resolver.lookup_ip(host).await {
@@ -114,7 +120,7 @@ impl Resolver {
                         .map(move |models| Endpoint { ip, models })
                 }))
                 .await;
-                Some((endpoints, interval))
+                Some((endpoints, (rng, instant)))
             },
         )
         .instrument(tracing::info_span!("watch", ?upstream))
