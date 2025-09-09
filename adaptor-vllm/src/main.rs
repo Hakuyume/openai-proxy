@@ -6,7 +6,9 @@ use futures::{FutureExt, TryFutureExt};
 use http::header::HOST;
 use http_body_util::BodyExt;
 use nom::Finish;
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::sync::{Arc, RwLock};
 use tokio::net::TcpListener;
 
 #[derive(Parser)]
@@ -27,7 +29,11 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/v1/models", routing::get(list_models))
         .fallback(fallback)
-        .with_state((client, args.upstream))
+        .with_state(Arc::new(State {
+            client,
+            upstream: args.upstream,
+            cache: RwLock::new(HashMap::new()),
+        }))
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, args.port)).await?;
@@ -38,42 +44,64 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn list_models(
-    extract::State((client, upstream)): extract::State<(
-        misc::hyper::Client<axum::body::Body>,
-        http::Uri,
-    )>,
-) -> Result<Json<schemas::List<schemas::Model>>, axum::response::Response> {
-    async fn get(
-        client: &misc::hyper::Client<axum::body::Body>,
-        upstream: &http::Uri,
-        path: &str,
-    ) -> Result<Bytes, axum::response::Response> {
-        let uri = format!("{}{path}", upstream.to_string().trim_end_matches('/'))
+struct State {
+    client: misc::hyper::Client<axum::body::Body>,
+    upstream: http::Uri,
+    cache: RwLock<HashMap<&'static str, Bytes>>,
+}
+
+impl State {
+    #[tracing::instrument(skip(self))]
+    async fn get(&self, path: &'static str) -> Result<Bytes, axum::response::Response> {
+        let uri = format!("{}{path}", self.upstream.to_string().trim_end_matches('/'))
             .parse::<http::Uri>()
             .map_err(|e| {
+                tracing::error!(error = e.to_string());
                 (http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
             })?;
-        let response = client
-            .get(uri)
-            .map_err(|e| (http::StatusCode::BAD_GATEWAY, e.to_string()).into_response())
-            .await?;
-        if response.status().is_success() {
-            response
-                .collect()
-                .map_ok(http_body_util::Collected::to_bytes)
-                .map_err(|e| (http::StatusCode::BAD_GATEWAY, e.to_string()).into_response())
-                .await
-        } else {
-            Err(response.into_response())
+        let f = async {
+            let response = self
+                .client
+                .get(uri)
+                .map_err(|e| {
+                    tracing::error!(error = e.to_string());
+                    (http::StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+                })
+                .await?;
+            if response.status().is_success() {
+                response
+                    .collect()
+                    .map_ok(http_body_util::Collected::to_bytes)
+                    .map_err(|e| {
+                        tracing::error!(error = e.to_string());
+                        (http::StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+                    })
+                    .await
+            } else {
+                Err(response.into_response())
+            }
+        };
+        match f.await {
+            Ok(v) => {
+                self.cache.write().unwrap().insert(path, v.clone());
+                Ok(v)
+            }
+            Err(e) => {
+                if let Some(v) = self.cache.read().unwrap().get(path).cloned() {
+                    Ok(v)
+                } else {
+                    Err(e)
+                }
+            }
         }
     }
+}
 
-    let (body_0, body_1) = futures::future::try_join(
-        get(&client, &upstream, "/v1/models"),
-        get(&client, &upstream, "/metrics"),
-    )
-    .await?;
+async fn list_models(
+    extract::State(state): extract::State<Arc<State>>,
+) -> Result<Json<schemas::List<schemas::Model>>, axum::response::Response> {
+    let (body_0, body_1) =
+        futures::future::try_join(state.get("/v1/models"), state.get("/metrics")).await?;
 
     let mut models = serde_json::from_slice::<schemas::List<schemas::Model>>(&body_0)
         .map_err(|e| (http::StatusCode::BAD_GATEWAY, e.to_string()).into_response())?;
@@ -117,21 +145,19 @@ async fn list_models(
 }
 
 async fn fallback(
-    extract::State((client, upstream)): extract::State<(
-        misc::hyper::Client<axum::body::Body>,
-        http::Uri,
-    )>,
+    extract::State(state): extract::State<Arc<State>>,
     mut request: http::Request<axum::body::Body>,
 ) -> Result<http::Response<hyper::body::Incoming>, (http::StatusCode, String)> {
     *request.uri_mut() = format!(
         "{}{}",
-        upstream.to_string().trim_end_matches('/'),
+        state.upstream.to_string().trim_end_matches('/'),
         request.uri(),
     )
     .parse::<http::Uri>()
     .map_err(|e| (http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     request.headers_mut().remove(HOST);
-    client
+    state
+        .client
         .request(request)
         .map_err(|e| (http::StatusCode::BAD_GATEWAY, e.to_string()))
         .await
