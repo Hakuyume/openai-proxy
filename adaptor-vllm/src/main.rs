@@ -19,7 +19,9 @@ struct Args {
     #[clap(long)]
     upstream: http::Uri,
     #[clap(long, value_parser = humantime::parse_duration)]
-    ttl: Duration,
+    ttl_hard: Duration,
+    #[clap(long, value_parser = humantime::parse_duration)]
+    ttl_soft: Duration,
 }
 
 #[tokio::main]
@@ -36,7 +38,8 @@ async fn main() -> anyhow::Result<()> {
             client,
             upstream: args.upstream,
             cache: Mutex::new(HashMap::new()),
-            ttl: args.ttl,
+            ttl_hard: args.ttl_hard,
+            ttl_soft: args.ttl_soft,
         }))
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
@@ -52,7 +55,8 @@ struct State {
     client: misc::hyper::Client<axum::body::Body>,
     upstream: http::Uri,
     cache: Mutex<HashMap<&'static str, Cache>>,
-    ttl: Duration,
+    ttl_hard: Duration,
+    ttl_soft: Duration,
 }
 type Cache = Arc<tokio::sync::Mutex<Option<(Bytes, Instant)>>>;
 
@@ -94,9 +98,9 @@ impl State {
         let mut cache = cache.lock().await;
         if let Some((body, instant)) = &*cache
             && let elasped = instant.elapsed()
-            && elasped < self.ttl
+            && elasped < self.ttl_hard
         {
-            if elasped < self.ttl * 4 / 5 {
+            if elasped < self.ttl_soft {
                 Ok(body.clone())
             } else {
                 match f.await {
