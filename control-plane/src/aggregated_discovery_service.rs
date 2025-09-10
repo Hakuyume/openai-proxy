@@ -93,7 +93,8 @@ impl AggregatedDiscoveryService for Server {
         let clusters = self.clusters.clone();
         let route_configurations = self.route_configurations.clone();
         let stream = stream.map(move |item| match item {
-            Either::Left(Ok(request)) => {
+            Either::Left(request) => {
+                let request = request?;
                 tracing::info!(
                     request.version_info,
                     ?request.resource_names,
@@ -104,25 +105,24 @@ impl AggregatedDiscoveryService for Server {
                     && request.response_nonce.is_empty()
                     && let Some((version_info, clusters)) = &*clusters.borrow()
                 {
-                    Ok(vec![response(*version_info, clusters)?])
+                    response(*version_info, clusters).map(Some)
                 } else if request.type_url == route_v3::RouteConfiguration::type_url()
                     && request.response_nonce.is_empty()
                     && let Some((version_info, route_configurations)) =
                         &*route_configurations.borrow()
                 {
-                    Ok(vec![response(*version_info, route_configurations)?])
+                    response(*version_info, route_configurations).map(Some)
                 } else {
-                    Ok(Vec::new())
+                    Ok(None)
                 }
             }
-            Either::Left(Err(e)) => Err(e),
             Either::Right(Either::Left(Some((version_info, clusters)))) => {
-                Ok(vec![response(version_info, &clusters)?])
+                response(version_info, &clusters).map(Some)
             }
             Either::Right(Either::Right(Some((version_info, route_configurations)))) => {
-                Ok(vec![response(version_info, &route_configurations)?])
+                response(version_info, &route_configurations).map(Some)
             }
-            _ => Ok(Vec::new()),
+            _ => Ok(None),
         });
         Ok(tonic::Response::new(
             stream
