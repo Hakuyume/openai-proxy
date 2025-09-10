@@ -51,9 +51,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: openai-proxy
-          path: |
-            target/x86_64-unknown-linux-musl/release/adaptor-vllm
-            target/x86_64-unknown-linux-musl/release/control-plane
+          path: target/x86_64-unknown-linux-musl/release/control-plane
   docker:
     needs:
       - cargo-build
@@ -67,7 +65,6 @@ jobs:
       - run: |
           cat << 'EOD' > Dockerfile
           FROM busybox
-          COPY --chmod=755 adaptor-vllm /usr/local/bin/openai-proxy-adaptor-vllm
           COPY --chmod=755 control-plane /usr/local/bin/openai-proxy-control-plane
           EOD
       - uses: docker/login-action@v3

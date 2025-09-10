@@ -1,3 +1,6 @@
+use bytes::Bytes;
+use futures::TryFutureExt;
+use http_body_util::BodyExt;
 use hyper_rustls::ConfigBuilderExt;
 use std::iter;
 use std::net::{IpAddr, SocketAddr};
@@ -52,4 +55,34 @@ where
     hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
         .http2_only(http2_only)
         .build(connector)
+}
+
+pub async fn get<B>(
+    client: &Client<B>,
+    uri: &http::Uri,
+    path: &str,
+) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>>
+where
+    B: Default + http_body::Body + Send + Unpin + 'static,
+    B::Data: Send,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    #[derive(Debug, thiserror::Error)]
+    #[error("{0:?}")]
+    struct StatusError(http::Response<Bytes>);
+
+    let response = client
+        .get(format!("{}{path}", uri.to_string().trim_end_matches('/')).parse()?)
+        .await?;
+    let (parts, body) = response.into_parts();
+    let body = body
+        .collect()
+        .map_ok(http_body_util::Collected::to_bytes)
+        .await?;
+    let response = http::Response::from_parts(parts, body);
+    if response.status().is_success() {
+        Ok(response.into_body())
+    } else {
+        Err(StatusError(response).into())
+    }
 }

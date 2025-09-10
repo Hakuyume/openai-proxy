@@ -1,5 +1,6 @@
 mod aggregated_discovery_service;
 mod lb;
+mod vllm;
 
 use clap::{Parser, Subcommand};
 
@@ -12,6 +13,7 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     Lb(lb::Args),
+    Vllm(vllm::Args),
 }
 
 #[tokio::main]
@@ -21,5 +23,6 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     match args.command {
         Command::Lb(args) => lb::main(args).await,
+        Command::Vllm(args) => vllm::main(args).await,
     }
 }

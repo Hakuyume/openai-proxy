@@ -4,9 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bytes.workspace = true
 futures.workspace = true
+http.workspace = true
 http-body.workspace = true
+http-body-util.workspace = true
 hyper-rustls = { workspace = true, features = ["http1", "http2", "webpki-roots"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio"] }
 rustls.workspace = true
+thiserror.workspace = true
+tonic-envoy.path = "../tonic-envoy"
 tower = { workspace = true, features = ["util"] }

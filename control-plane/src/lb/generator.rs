@@ -114,28 +114,7 @@ impl Generator<'_> {
             virtual_hosts: vec![self.virtual_host()?],
             ..route_v3::RouteConfiguration::default()
         };
-
-        let max_direct_response_body_size_bytes = route_configuration
-            .virtual_hosts
-            .iter()
-            .flat_map(|virtual_host| &virtual_host.routes)
-            .filter_map(|route| match &route.action {
-                Some(route_v3::route::Action::DirectResponse(route_v3::DirectResponseAction {
-                    body:
-                        Some(core_v3::DataSource {
-                            specifier: Some(core_v3::data_source::Specifier::InlineString(body)),
-                            ..
-                        }),
-                    ..
-                })) => Some(body.len()),
-                _ => None,
-            })
-            .max();
-        route_configuration.max_direct_response_body_size_bytes =
-            max_direct_response_body_size_bytes.map(|max_direct_response_body_size_bytes| {
-                max_direct_response_body_size_bytes as _
-            });
-
+        misc::envoy::patch_max_direct_response_body_size_bytes(&mut route_configuration);
         Ok(route_configuration)
     }
 
@@ -170,7 +149,6 @@ impl Generator<'_> {
             .collect::<Vec<_>>();
         data.sort_unstable_by_key(|model| &model.id);
         let body = serde_json::to_string(&schemas::List { data })?;
-
         Ok(route_v3::Route {
             r#match: Some(route_v3::RouteMatch {
                 path_specifier: Some(route_v3::route_match::PathSpecifier::Path(
@@ -240,7 +218,6 @@ impl Generator<'_> {
             .copied()
             .max()
             .unwrap_or_default();
-
         Ok(route_v3::Route {
             r#match: Some(route_v3::RouteMatch {
                 path_specifier: Some(route_v3::route_match::PathSpecifier::Prefix("/".to_owned())),

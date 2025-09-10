@@ -1,5 +1,4 @@
-use futures::{FutureExt, Stream};
-use http_body_util::BodyExt;
+use futures::{FutureExt, Stream, TryFutureExt};
 use rand::{Rng, SeedableRng};
 use serde::Deserialize;
 use std::net::IpAddr;
@@ -132,21 +131,20 @@ impl Resolver {
         upstream: &Upstream,
         ip: IpAddr,
     ) -> anyhow::Result<schemas::List<schemas::Model>> {
-        let client =
-            misc::hyper::client::<String>(self.tls_config.clone(), Some(ip), upstream.http2_only);
-        let response = tokio::time::timeout(upstream.timeout.unwrap_or(Duration::MAX), async {
-            let response = client
-                .get(format!("{}v1/models", upstream.uri).parse()?)
-                .await?;
-            let (parts, body) = response.into_parts();
-            let body = body.collect().await?.to_bytes();
-            anyhow::Ok(http::Response::from_parts(parts, body))
-        })
+        let body = tokio::time::timeout(
+            upstream.timeout.unwrap_or(Duration::MAX),
+            misc::hyper::get(
+                &misc::hyper::client::<String>(
+                    self.tls_config.clone(),
+                    Some(ip),
+                    upstream.http2_only,
+                ),
+                &upstream.uri,
+                "/v1/models",
+            )
+            .map_err(anyhow::Error::from_boxed),
+        )
         .await??;
-        if response.status().is_success() {
-            Ok(serde_json::from_slice(response.body())?)
-        } else {
-            Err(anyhow::format_err!("response = {response:?}"))
-        }
+        Ok(serde_json::from_slice(&body)?)
     }
 }
