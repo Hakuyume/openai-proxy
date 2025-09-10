@@ -7,11 +7,11 @@ use std::time::{Duration, Instant};
 use tracing_futures::Instrument;
 
 #[derive(Clone, Debug)]
-pub(crate) struct Upstream {
-    pub(crate) uri: http::Uri,
-    pub(crate) http2_only: bool,
-    pub(crate) interval: Duration,
-    pub(crate) timeout: Option<Duration>,
+pub(super) struct Upstream {
+    pub(super) uri: http::Uri,
+    pub(super) http2_only: bool,
+    pub(super) interval: Duration,
+    pub(super) timeout: Option<Duration>,
 }
 
 impl std::str::FromStr for Upstream {
@@ -49,18 +49,18 @@ impl std::str::FromStr for Upstream {
     }
 }
 
-pub(crate) struct Resolver {
+pub(super) struct Resolver {
     tls_config: rustls::ClientConfig,
     resolver: hickory_resolver::TokioResolver,
 }
 
-pub(crate) struct Endpoint {
-    pub(crate) ip: IpAddr,
-    pub(crate) models: Vec<schemas::Model>,
+pub(super) struct Endpoint {
+    pub(super) ip: IpAddr,
+    pub(super) models: Vec<schemas::Model>,
 }
 
 impl Resolver {
-    pub(crate) fn new() -> anyhow::Result<Self> {
+    pub(super) fn new() -> anyhow::Result<Self> {
         let tls_config = misc::hyper::tls_config()?;
         let resolver = {
             let (config, mut opts) = hickory_resolver::system_conf::read_system_conf()?;
@@ -81,7 +81,7 @@ impl Resolver {
         })
     }
 
-    pub(crate) fn watch<'a>(
+    pub(super) fn watch<'a>(
         &'a self,
         upstream: &'a Upstream,
     ) -> impl Stream<Item = Vec<Endpoint>> + Send + 'a {
