@@ -14,36 +14,60 @@ use uuid::Uuid;
 
 pub(crate) type Service = AggregatedDiscoveryServiceServer<Server>;
 pub(crate) fn service() -> (Reporter, Service) {
-    let (tx, rx) = watch::channel(None);
+    let (clusters_tx, clusters_rx) = watch::channel(None);
+    let (route_configurations_tx, route_configurations_rx) = watch::channel(None);
     (
-        Reporter { tx, state: None },
-        AggregatedDiscoveryServiceServer::new(Server { rx }),
+        Reporter {
+            clusters: clusters_tx,
+            route_configurations: route_configurations_tx,
+        },
+        AggregatedDiscoveryServiceServer::new(Server {
+            clusters: clusters_rx,
+            route_configurations: route_configurations_rx,
+        }),
     )
 }
 
+type Sender<T> = watch::Sender<Option<(Uuid, Arc<[T]>)>>;
+type Receiver<T> = watch::Receiver<Option<(Uuid, Arc<[T]>)>>;
+
 pub(crate) struct Reporter {
-    tx: watch::Sender<Option<(Uuid, Arc<State>)>>,
-    state: Option<Arc<State>>,
+    clusters: Sender<cluster_v3::Cluster>,
+    route_configurations: Sender<route_v3::RouteConfiguration>,
 }
 
 pub(crate) struct Server {
-    rx: watch::Receiver<Option<(Uuid, Arc<State>)>>,
-}
-
-#[derive(PartialEq)]
-pub(crate) struct State {
-    pub(crate) clusters: Vec<cluster_v3::Cluster>,
-    pub(crate) route_configurations: Vec<route_v3::RouteConfiguration>,
+    clusters: Receiver<cluster_v3::Cluster>,
+    route_configurations: Receiver<route_v3::RouteConfiguration>,
 }
 
 impl Reporter {
-    pub(crate) fn update(&mut self, state: State) -> Result<(), watch::error::SendError<()>> {
-        let state = Arc::new(state);
-        if self.state.as_ref() != Some(&state) {
-            self.tx
-                .send(Some((Uuid::new_v4(), state.clone())))
+    pub(crate) fn clusters(
+        &mut self,
+        value: Vec<cluster_v3::Cluster>,
+    ) -> Result<(), watch::error::SendError<()>> {
+        Self::send(&self.clusters, value)
+    }
+
+    pub(crate) fn route_configurations(
+        &mut self,
+        value: Vec<route_v3::RouteConfiguration>,
+    ) -> Result<(), watch::error::SendError<()>> {
+        Self::send(&self.route_configurations, value)
+    }
+
+    fn send<T>(tx: &Sender<T>, value: Vec<T>) -> Result<(), watch::error::SendError<()>>
+    where
+        T: PartialEq,
+    {
+        let value = Arc::from(value);
+        if tx
+            .borrow()
+            .as_ref()
+            .is_none_or(|(_, current)| *current != value)
+        {
+            tx.send(Some((Uuid::new_v4(), value)))
                 .map_err(|_| watch::error::SendError(()))?;
-            self.state = Some(state);
         }
         Ok(())
     }
@@ -59,9 +83,15 @@ impl AggregatedDiscoveryService for Server {
     ) -> Result<tonic::Response<Self::StreamAggregatedResourcesStream>, tonic::Status> {
         let stream = futures::stream::select(
             request.into_inner().map(Either::Left),
-            tokio_stream::wrappers::WatchStream::new(self.rx.clone()).map(Either::Right),
+            futures::stream::select(
+                tokio_stream::wrappers::WatchStream::new(self.clusters.clone()).map(Either::Left),
+                tokio_stream::wrappers::WatchStream::new(self.route_configurations.clone())
+                    .map(Either::Right),
+            )
+            .map(Either::Right),
         );
-        let mut state = None::<(Uuid, Arc<State>)>;
+        let clusters = self.clusters.clone();
+        let route_configurations = self.route_configurations.clone();
         let stream = stream.map(move |item| match item {
             Either::Left(Ok(request)) => {
                 tracing::info!(
@@ -70,32 +100,29 @@ impl AggregatedDiscoveryService for Server {
                     request.type_url,
                     request.response_nonce,
                 );
-                if request.response_nonce.is_empty()
-                    && let Some((version_info, state)) = &state
+                if request.type_url == cluster_v3::Cluster::type_url()
+                    && request.response_nonce.is_empty()
+                    && let Some((version_info, clusters)) = &*clusters.borrow()
                 {
-                    if request.type_url == cluster_v3::Cluster::type_url() {
-                        Ok(vec![response(*version_info, &state.clusters)?])
-                    } else if request.type_url == cluster_v3::Cluster::type_url() {
-                        Ok(vec![response(*version_info, &state.route_configurations)?])
-                    } else {
-                        Ok(Vec::new())
-                    }
+                    Ok(vec![response(*version_info, clusters)?])
+                } else if request.type_url == route_v3::RouteConfiguration::type_url()
+                    && request.response_nonce.is_empty()
+                    && let Some((version_info, route_configurations)) =
+                        &*route_configurations.borrow()
+                {
+                    Ok(vec![response(*version_info, route_configurations)?])
                 } else {
                     Ok(Vec::new())
                 }
             }
             Either::Left(Err(e)) => Err(e),
-            Either::Right(s) => {
-                state = s;
-                if let Some((version_info, state)) = &state {
-                    Ok(vec![
-                        response(*version_info, &state.clusters)?,
-                        response(*version_info, &state.route_configurations)?,
-                    ])
-                } else {
-                    Ok(Vec::new())
-                }
+            Either::Right(Either::Left(Some((version_info, clusters)))) => {
+                Ok(vec![response(version_info, &clusters)?])
             }
+            Either::Right(Either::Right(Some((version_info, route_configurations)))) => {
+                Ok(vec![response(version_info, &route_configurations)?])
+            }
+            _ => Ok(Vec::new()),
         });
         Ok(tonic::Response::new(
             stream
