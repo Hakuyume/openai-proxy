@@ -81,10 +81,8 @@ async fn main() -> anyhow::Result<()> {
                     timeout: args.timeout,
                     idle_timeout: args.idle_timeout,
                 };
-                ads_reporter.update(aggregated_discovery_service::State {
-                    clusters: generator.clusters()?,
-                    route_configurations: vec![generator.route_configuration()?],
-                })?;
+                ads_reporter.clusters(generator.clusters()?)?;
+                ads_reporter.route_configurations(vec![generator.route_configuration()?])?;
             }
             Ok(())
         },
