@@ -101,7 +101,7 @@ impl Generator<'_> {
             };
             cluster.typed_extension_protocol_options.insert(
                 "envoy.extensions.upstreams.http.v3.HttpProtocolOptions".to_owned(),
-                prost_types::Any::from_msg(&http_protocol_options)?,
+                misc::pbjson::from_msg(&http_protocol_options)?,
             );
         }
 
@@ -251,13 +251,12 @@ impl Generator<'_> {
                                 .map(
                                     |(i, ip, pending)| route_v3::weighted_cluster::ClusterWeight {
                                         name: Self::cluster_name(i, ip),
-                                        weight: Some(
+                                        weight: Some(pbjson_types::UInt32Value::from(
                                             pending
                                                 .into_iter()
                                                 .map(|pending| (1 + pending_max) / (1 + pending))
-                                                .sum::<u64>()
-                                                as _,
-                                        ),
+                                                .sum::<u32>(),
+                                        )),
                                         ..route_v3::weighted_cluster::ClusterWeight::default()
                                     },
                                 )
