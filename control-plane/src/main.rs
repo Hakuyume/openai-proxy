@@ -3,6 +3,7 @@ mod lb;
 mod vllm;
 
 use clap::{Parser, Subcommand};
+use serde::Deserialize;
 
 #[derive(Parser)]
 struct Args {
@@ -10,6 +11,7 @@ struct Args {
     command: Command,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     Lb(lb::Args),
@@ -25,4 +27,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Lb(args) => lb::main(args).await,
         Command::Vllm(args) => vllm::main(args).await,
     }
+}
+
+fn parse_json<T>(s: &str) -> Result<T, String>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_json::from_str(s).map_err(|e| e.to_string())
 }

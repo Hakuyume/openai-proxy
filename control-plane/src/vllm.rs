@@ -7,6 +7,7 @@ use futures::{StreamExt, TryFutureExt};
 use std::net::Ipv4Addr;
 use std::pin;
 use std::time::Duration;
+use tonic_envoy::envoy::config::route::v3 as route_v3;
 
 #[derive(Parser)]
 pub(super) struct Args {
@@ -20,10 +21,8 @@ pub(super) struct Args {
     route_config_name: String,
     #[clap(long)]
     cluster_name: String,
-    #[clap(long, value_parser = humantime::parse_duration)]
-    timeout: Option<Duration>,
-    #[clap(long, value_parser = humantime::parse_duration)]
-    idle_timeout: Option<Duration>,
+    #[clap(long, value_parser = super::parse_json::<route_v3::Route>)]
+    template_route: Option<route_v3::Route>,
 }
 
 pub(super) async fn main(args: Args) -> anyhow::Result<()> {
@@ -57,8 +56,7 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
                     models: &models,
                     route_config_name: &args.route_config_name,
                     cluster_name: &args.cluster_name,
-                    timeout: args.timeout,
-                    idle_timeout: args.idle_timeout,
+                    template_route: args.template_route.as_ref(),
                 };
                 ads_reporter.route_configurations(vec![generator.route_configuration()?])?;
             }

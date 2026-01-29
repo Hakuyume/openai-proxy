@@ -54,7 +54,7 @@ impl Resolver {
     }
 
     #[tracing::instrument(err, skip(self))]
-    async fn scrape_metrics(&self) -> anyhow::Result<(Option<u64>, Option<u64>)> {
+    async fn scrape_metrics(&self) -> anyhow::Result<(Option<u32>, Option<u32>)> {
         let body = misc::hyper::get(&self.client, &self.upstream, "/metrics")
             .map_err(anyhow::Error::from_boxed)
             .await?;
@@ -73,10 +73,10 @@ impl Resolver {
                 if let Ok(v) = sample.number.parse::<f64>() {
                     match sample.metricname {
                         "vllm:num_requests_running" => {
-                            *running.get_or_insert_default() += v as u64;
+                            *running.get_or_insert_default() += v as u32;
                         }
                         "vllm:num_requests_waiting" => {
-                            *pending.get_or_insert_default() += v as u64;
+                            *pending.get_or_insert_default() += v as u32;
                         }
                         _ => (),
                     }

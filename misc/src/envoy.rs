@@ -21,5 +21,7 @@ pub fn patch_max_direct_response_body_size_bytes(
         })
         .max();
     route_configuration.max_direct_response_body_size_bytes = max_direct_response_body_size_bytes
-        .map(|max_direct_response_body_size_bytes| max_direct_response_body_size_bytes as _);
+        .map(|max_direct_response_body_size_bytes| {
+            pbjson_types::UInt32Value::from(max_direct_response_body_size_bytes as u32)
+        });
 }

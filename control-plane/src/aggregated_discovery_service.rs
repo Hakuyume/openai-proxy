@@ -157,7 +157,7 @@ where
         version_info: version_info.to_string(),
         resources: resources
             .iter()
-            .map(prost_types::Any::from_msg)
+            .map(misc::pbjson::from_msg)
             .collect::<Result<_, _>>()
             .map_err(|e| tonic::Status::internal(e.to_string()))?,
         type_url: T::type_url(),

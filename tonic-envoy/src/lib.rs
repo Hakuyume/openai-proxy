@@ -4,6 +4,6 @@
 #![allow(rustdoc::bare_urls)]
 #![allow(rustdoc::invalid_html_tags)]
 
-include!(concat!(env!("OUT_DIR"), "/include_proto.rs"));
+include!(concat!(env!("OUT_DIR"), "/include.rs"));
 
 pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("envoy_descriptor");

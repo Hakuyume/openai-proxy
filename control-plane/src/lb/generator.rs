@@ -3,7 +3,6 @@ use sha2::{Digest, Sha224};
 use std::collections::{BTreeSet, HashMap};
 use std::iter;
 use std::net::IpAddr;
-use std::time::Duration;
 use tonic_envoy::envoy::config::cluster::v3 as cluster_v3;
 use tonic_envoy::envoy::config::core::v3 as core_v3;
 use tonic_envoy::envoy::config::endpoint::v3 as endpoint_v3;
@@ -16,8 +15,8 @@ pub(super) struct Generator<'a> {
     pub(super) state: &'a HashMap<usize, Vec<resolver::Endpoint>>,
     pub(super) route_config_name: &'a String,
     pub(super) metadata_namespace: &'a String,
-    pub(super) timeout: Option<Duration>,
-    pub(super) idle_timeout: Option<Duration>,
+    pub(super) template_cluster: Option<&'a cluster_v3::Cluster>,
+    pub(super) template_route: Option<&'a route_v3::Route>,
 }
 
 impl Generator<'_> {
@@ -38,7 +37,7 @@ impl Generator<'_> {
                 endpoints.sort_unstable_by_key(|endpoint| endpoint.ip);
                 endpoints
                     .into_iter()
-                    .map(move |endpoint| Self::cluster(i, upstream, endpoint.ip))
+                    .map(move |endpoint| self.cluster(i, upstream, endpoint.ip))
             })
             .collect::<Result<Vec<_>, _>>()?;
         clusters.sort_unstable_by_key(|cluster| cluster.name.clone());
@@ -46,6 +45,7 @@ impl Generator<'_> {
     }
 
     fn cluster(
+        &self,
         i: usize,
         upstream: &resolver::Upstream,
         ip: IpAddr,
@@ -68,21 +68,20 @@ impl Generator<'_> {
             )),
             ..endpoint_v3::LbEndpoint::default()
         };
-        let mut cluster = cluster_v3::Cluster {
-            name: name.clone(),
-            cluster_discovery_type: Some(cluster_v3::cluster::ClusterDiscoveryType::Type(
-                cluster_v3::cluster::DiscoveryType::Static as _,
-            )),
-            load_assignment: Some(endpoint_v3::ClusterLoadAssignment {
-                cluster_name: name.clone(),
-                endpoints: vec![endpoint_v3::LocalityLbEndpoints {
-                    lb_endpoints: vec![lb_endpoint],
-                    ..endpoint_v3::LocalityLbEndpoints::default()
-                }],
-                ..endpoint_v3::ClusterLoadAssignment::default()
-            }),
-            ..cluster_v3::Cluster::default()
-        };
+
+        let mut cluster = self.template_cluster.cloned().unwrap_or_default();
+        cluster.name = name.clone();
+        cluster.cluster_discovery_type = Some(cluster_v3::cluster::ClusterDiscoveryType::Type(
+            cluster_v3::cluster::DiscoveryType::Static as _,
+        ));
+        let load_assignment = cluster.load_assignment.get_or_insert_default();
+        load_assignment.cluster_name = name.clone();
+        load_assignment
+            .endpoints
+            .push(endpoint_v3::LocalityLbEndpoints {
+                lb_endpoints: vec![lb_endpoint],
+                ..endpoint_v3::LocalityLbEndpoints::default()
+            });
 
         if upstream.http2_only {
             use http_v3::http_protocol_options::explicit_http_config::ProtocolConfig;
@@ -101,7 +100,7 @@ impl Generator<'_> {
             };
             cluster.typed_extension_protocol_options.insert(
                 "envoy.extensions.upstreams.http.v3.HttpProtocolOptions".to_owned(),
-                prost_types::Any::from_msg(&http_protocol_options)?,
+                misc::pbjson::from_msg(&http_protocol_options)?,
             );
         }
 
@@ -149,48 +148,44 @@ impl Generator<'_> {
             .collect::<Vec<_>>();
         data.sort_unstable_by_key(|model| &model.id);
         let body = serde_json::to_string(&schemas::List { data })?;
-        Ok(route_v3::Route {
-            r#match: Some(route_v3::RouteMatch {
-                path_specifier: Some(route_v3::route_match::PathSpecifier::Path(
-                    "/v1/models".to_owned(),
-                )),
-                headers: vec![route_v3::HeaderMatcher {
-                    name: ":method".to_owned(),
-                    header_match_specifier: Some(
-                        route_v3::header_matcher::HeaderMatchSpecifier::StringMatch(
-                            matcher_v3::StringMatcher {
-                                match_pattern: Some(
-                                    matcher_v3::string_matcher::MatchPattern::Exact(
-                                        "GET".to_owned(),
-                                    ),
-                                ),
-                                ..matcher_v3::StringMatcher::default()
-                            },
-                        ),
-                    ),
-                    ..route_v3::HeaderMatcher::default()
-                }],
-                ..route_v3::RouteMatch::default()
-            }),
-            response_headers_to_add: vec![core_v3::HeaderValueOption {
+
+        let mut route = self.template_route.cloned().unwrap_or_default();
+        let match_ = route.r#match.get_or_insert_default();
+        match_.path_specifier = Some(route_v3::route_match::PathSpecifier::Path(
+            "/v1/models".to_owned(),
+        ));
+        match_.headers.push(route_v3::HeaderMatcher {
+            name: ":method".to_owned(),
+            header_match_specifier: Some(
+                route_v3::header_matcher::HeaderMatchSpecifier::StringMatch(
+                    matcher_v3::StringMatcher {
+                        match_pattern: Some(matcher_v3::string_matcher::MatchPattern::Exact(
+                            "GET".to_owned(),
+                        )),
+                        ..matcher_v3::StringMatcher::default()
+                    },
+                ),
+            ),
+            ..route_v3::HeaderMatcher::default()
+        });
+        route
+            .request_headers_to_add
+            .push(core_v3::HeaderValueOption {
                 header: Some(core_v3::HeaderValue {
                     key: "content-type".to_owned(),
                     value: "application/json".to_owned(),
                     ..core_v3::HeaderValue::default()
                 }),
                 ..core_v3::HeaderValueOption::default()
-            }],
-            action: Some(route_v3::route::Action::DirectResponse(
-                route_v3::DirectResponseAction {
-                    status: http::StatusCode::OK.as_u16() as _,
-                    body: Some(core_v3::DataSource {
-                        specifier: Some(core_v3::data_source::Specifier::InlineString(body)),
-                        ..core_v3::DataSource::default()
-                    }),
-                },
-            )),
-            ..route_v3::Route::default()
-        })
+            });
+        let action = misc::get_or_insert_default!(
+            &mut route.action,
+            route_v3::route::Action::DirectResponse
+        );
+        action.status = http::StatusCode::OK.as_u16() as _;
+        action.body.get_or_insert_default().specifier =
+            Some(core_v3::data_source::Specifier::InlineString(body));
+        Ok(route)
     }
 
     fn route_model(&self, model_id: String) -> anyhow::Result<route_v3::Route> {
@@ -218,59 +213,49 @@ impl Generator<'_> {
             .copied()
             .max()
             .unwrap_or_default();
-        Ok(route_v3::Route {
-            r#match: Some(route_v3::RouteMatch {
-                path_specifier: Some(route_v3::route_match::PathSpecifier::Prefix("/".to_owned())),
-                dynamic_metadata: vec![matcher_v3::MetadataMatcher {
-                    filter: self.metadata_namespace.clone(),
-                    path: vec![matcher_v3::metadata_matcher::PathSegment {
-                        segment: Some(matcher_v3::metadata_matcher::path_segment::Segment::Key(
-                            "model".to_owned(),
+
+        let mut route = self.template_route.cloned().unwrap_or_default();
+        let match_ = route.r#match.get_or_insert_default();
+        match_.path_specifier = Some(route_v3::route_match::PathSpecifier::Prefix("/".to_owned()));
+        match_.dynamic_metadata.push(matcher_v3::MetadataMatcher {
+            filter: self.metadata_namespace.clone(),
+            path: vec![matcher_v3::metadata_matcher::PathSegment {
+                segment: Some(matcher_v3::metadata_matcher::path_segment::Segment::Key(
+                    "model".to_owned(),
+                )),
+            }],
+            value: Some(matcher_v3::ValueMatcher {
+                match_pattern: Some(matcher_v3::value_matcher::MatchPattern::StringMatch(
+                    matcher_v3::StringMatcher {
+                        match_pattern: Some(matcher_v3::string_matcher::MatchPattern::Exact(
+                            model_id,
                         )),
-                    }],
-                    value: Some(matcher_v3::ValueMatcher {
-                        match_pattern: Some(matcher_v3::value_matcher::MatchPattern::StringMatch(
-                            matcher_v3::StringMatcher {
-                                match_pattern: Some(
-                                    matcher_v3::string_matcher::MatchPattern::Exact(model_id),
-                                ),
-                                ..matcher_v3::StringMatcher::default()
-                            },
-                        )),
-                    }),
-                    ..matcher_v3::MetadataMatcher::default()
-                }],
-                ..route_v3::RouteMatch::default()
+                        ..matcher_v3::StringMatcher::default()
+                    },
+                )),
             }),
-            action: Some(route_v3::route::Action::Route(route_v3::RouteAction {
-                cluster_specifier: Some(
-                    route_v3::route_action::ClusterSpecifier::WeightedClusters(
-                        route_v3::WeightedCluster {
-                            clusters: endpoints
-                                .into_iter()
-                                .map(
-                                    |(i, ip, pending)| route_v3::weighted_cluster::ClusterWeight {
-                                        name: Self::cluster_name(i, ip),
-                                        weight: Some(
-                                            pending
-                                                .into_iter()
-                                                .map(|pending| (1 + pending_max) / (1 + pending))
-                                                .sum::<u64>()
-                                                as _,
-                                        ),
-                                        ..route_v3::weighted_cluster::ClusterWeight::default()
-                                    },
-                                )
-                                .collect(),
-                            ..route_v3::WeightedCluster::default()
-                        },
-                    ),
-                ),
-                timeout: self.timeout.map(TryInto::try_into).transpose()?,
-                idle_timeout: self.idle_timeout.map(TryInto::try_into).transpose()?,
-                ..route_v3::RouteAction::default()
-            })),
-            ..route_v3::Route::default()
-        })
+            ..matcher_v3::MetadataMatcher::default()
+        });
+        let action =
+            misc::get_or_insert_default!(&mut route.action, route_v3::route::Action::Route);
+        let cluster_specifier = misc::get_or_insert_default!(
+            &mut action.cluster_specifier,
+            route_v3::route_action::ClusterSpecifier::WeightedClusters
+        );
+        cluster_specifier
+            .clusters
+            .extend(endpoints.into_iter().map(|(i, ip, pending)| {
+                route_v3::weighted_cluster::ClusterWeight {
+                    name: Self::cluster_name(i, ip),
+                    weight: Some(pbjson_types::UInt32Value::from(
+                        pending
+                            .into_iter()
+                            .map(|pending| (1 + pending_max) / (1 + pending))
+                            .sum::<u32>(),
+                    )),
+                    ..route_v3::weighted_cluster::ClusterWeight::default()
+                }
+            }));
+        Ok(route)
     }
 }
