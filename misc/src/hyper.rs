@@ -7,12 +7,12 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tower::ServiceExt;
 
-pub fn tls_config() -> Result<rustls::ClientConfig, rustls::Error> {
+pub fn tls_config() -> Result<rustls::ClientConfig, Box<dyn std::error::Error + Send + Sync>> {
     Ok(rustls::ClientConfig::builder_with_provider(Arc::new(
         rustls::crypto::aws_lc_rs::default_provider(),
     ))
     .with_safe_default_protocol_versions()?
-    .with_webpki_roots()
+    .with_native_roots()?
     .with_no_client_auth())
 }
 
