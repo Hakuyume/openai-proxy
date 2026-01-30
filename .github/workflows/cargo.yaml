@@ -55,6 +55,7 @@ jobs:
           echo CARGO_BUILD_TARGET=x86_64-unknown-linux-musl >> ${GITHUB_ENV}
       - if: matrix.platform == 'linux-arm64'
         run: |
+          sudo apt-get install --no-install-recommends --yes libprotobuf-dev protobuf-compiler
           echo CARGO_BUILD_TARGET=aarch64-unknown-linux-musl >> ${GITHUB_ENV}
           echo USE_CROSS=true >> ${GITHUB_ENV}
       - run: rustup target add ${{ env.CARGO_BUILD_TARGET }}
@@ -63,7 +64,7 @@ jobs:
         with:
           tool: cross
       - run: |
-          if [ "$USE_CROSS" = "true" ]; then
+          if [ "${{ env.USE_CROSS }}" = "true" ]; then
             cross build --locked --release --target ${{ env.CARGO_BUILD_TARGET }}
           else
             cargo build --locked --release
