@@ -57,17 +57,16 @@ jobs:
         run: |
           sudo apt-get install --no-install-recommends --yes libprotobuf-dev protobuf-compiler
           echo CARGO_BUILD_TARGET=aarch64-unknown-linux-musl >> ${GITHUB_ENV}
-      - run: rustup target add ${{ env.CARGO_BUILD_TARGET }}
+      - if: matrix.platform == 'linux-amd64'
+        run: rustup target add ${{ env.CARGO_BUILD_TARGET }}
       - if: matrix.platform == 'linux-arm64'
         uses: taiki-e/install-action@v2
         with:
           tool: cross
-      - run: |
-          if [ "${{ matrix.platform }}" = "linux-arm64" ]; then
-            cross build --locked --release --target ${{ env.CARGO_BUILD_TARGET }}
-          else
-            cargo build --locked --release --target ${{ env.CARGO_BUILD_TARGET }}
-          fi
+      - if: matrix.platform == 'linux-amd64'
+        run: cargo build --locked --release --target ${{ env.CARGO_BUILD_TARGET }}
+      - if: matrix.platform == 'linux-arm64'
+        run: cross build --locked --release --target ${{ env.CARGO_BUILD_TARGET }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}
