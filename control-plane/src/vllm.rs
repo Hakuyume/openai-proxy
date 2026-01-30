@@ -4,15 +4,15 @@ mod resolver;
 use crate::aggregated_discovery_service;
 use clap::Parser;
 use futures::{StreamExt, TryFutureExt};
-use std::net::Ipv4Addr;
+use std::net::SocketAddr;
 use std::pin;
 use std::time::Duration;
 use tonic_envoy::envoy::config::route::v3 as route_v3;
 
 #[derive(Parser)]
 pub(super) struct Args {
-    #[clap(long, default_value_t = 50051)]
-    port: u16,
+    #[clap(long, default_value_t = super::default_bind())]
+    bind: SocketAddr,
     #[clap(long)]
     upstream: http::Uri,
     #[clap(long, value_parser = humantime::parse_duration)]
@@ -44,7 +44,7 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
                 .add_service(reflection_service)
                 .add_service(health_service)
                 .add_service(ads_service)
-                .serve((Ipv4Addr::UNSPECIFIED, args.port).into())
+                .serve(args.bind)
                 .await?;
             Ok(())
         },

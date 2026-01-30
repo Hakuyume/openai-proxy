@@ -4,6 +4,7 @@ mod vllm;
 
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
+use std::net::{Ipv4Addr, SocketAddr};
 
 #[derive(Parser)]
 struct Args {
@@ -27,6 +28,10 @@ async fn main() -> anyhow::Result<()> {
         Command::Lb(args) => lb::main(args).await,
         Command::Vllm(args) => vllm::main(args).await,
     }
+}
+
+fn default_bind() -> SocketAddr {
+    (Ipv4Addr::LOCALHOST, 50051).into()
 }
 
 fn parse_json<T>(s: &str) -> Result<T, String>
