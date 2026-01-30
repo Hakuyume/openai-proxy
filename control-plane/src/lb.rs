@@ -5,14 +5,14 @@ use crate::aggregated_discovery_service;
 use clap::Parser;
 use futures::{StreamExt, TryFutureExt};
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::SocketAddr;
 use tonic_envoy::envoy::config::cluster::v3 as cluster_v3;
 use tonic_envoy::envoy::config::route::v3 as route_v3;
 
 #[derive(Parser)]
 pub(super) struct Args {
-    #[clap(long, default_value_t = 50051)]
-    port: u16,
+    #[clap(long, default_value_t = super::default_bind())]
+    bind: SocketAddr,
     #[clap(long)]
     upstream: Vec<resolver::Upstream>,
     #[clap(long)]
@@ -44,7 +44,7 @@ pub(super) async fn main(args: Args) -> anyhow::Result<()> {
                 .add_service(reflection_service)
                 .add_service(health_service)
                 .add_service(ads_service)
-                .serve((Ipv4Addr::UNSPECIFIED, args.port).into())
+                .serve(args.bind)
                 .await?;
             Ok(())
         },
