@@ -60,7 +60,7 @@ jobs:
       - if: matrix.platform == 'linux-amd64'
         run: rustup target add ${{ env.CARGO_BUILD_TARGET }}
       - if: matrix.platform == 'linux-arm64'
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: cargo install cross --version 0.2.5
       - if: matrix.platform == 'linux-amd64'
         run: cargo build --locked --release --target ${{ env.CARGO_BUILD_TARGET }}
       - if: matrix.platform == 'linux-arm64'
