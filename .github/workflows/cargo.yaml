@@ -60,9 +60,7 @@ jobs:
       - if: matrix.platform == 'linux-amd64'
         run: rustup target add ${{ env.CARGO_BUILD_TARGET }}
       - if: matrix.platform == 'linux-arm64'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
       - if: matrix.platform == 'linux-amd64'
         run: cargo build --locked --release --target ${{ env.CARGO_BUILD_TARGET }}
       - if: matrix.platform == 'linux-arm64'
