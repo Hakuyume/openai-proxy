@@ -60,7 +60,7 @@ pub(super) struct Endpoint {
 
 impl Resolver {
     pub(super) fn new() -> anyhow::Result<Self> {
-        let tls_config = misc::hyper::tls_config()?;
+        let tls_config = misc::hyper::tls_config().map_err(anyhow::Error::from_boxed)?;
         let resolver = {
             let (config, mut opts) = hickory_resolver::system_conf::read_system_conf()?;
             opts.ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;

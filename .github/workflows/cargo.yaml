@@ -75,6 +75,7 @@ jobs:
       - run: |
           cat << 'EOD' > Dockerfile
           FROM debian:trixie-slim
+          RUN apt-get update && apt-get install --yes ca-certificates
           ARG TARGETOS
           ARG TARGETARCH
           COPY --chmod=755 ${TARGETOS}-${TARGETARCH}/control-plane /usr/local/bin/openai-proxy-control-plane

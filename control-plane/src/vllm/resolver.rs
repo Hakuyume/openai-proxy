@@ -12,7 +12,11 @@ pub(super) struct Resolver {
 
 impl Resolver {
     pub(super) fn new(upstream: http::Uri, interval: Duration) -> anyhow::Result<Self> {
-        let client = misc::hyper::client(misc::hyper::tls_config()?, None, false);
+        let client = misc::hyper::client(
+            misc::hyper::tls_config().map_err(anyhow::Error::from_boxed)?,
+            None,
+            false,
+        );
         Ok(Self {
             client,
             upstream,
