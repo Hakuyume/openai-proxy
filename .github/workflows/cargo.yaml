@@ -30,6 +30,11 @@ jobs:
       - run: sudo apt-get install --no-install-recommends --yes libprotobuf-dev protobuf-compiler
       - run: cargo clippy --locked -- --deny=warnings
   cargo-build:
+    strategy:
+      matrix:
+        platform:
+          - linux-amd64
+          - linux-arm64
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,36 +49,47 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - if: matrix.platform == 'linux-amd64'
+        run: |
+          sudo apt-get install --no-install-recommends --yes libprotobuf-dev protobuf-compiler
+          echo CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu >> ${GITHUB_ENV}
+      - if: matrix.platform == 'linux-arm64'
+        run: |
+          sudo apt-get install --no-install-recommends --yes gcc-aarch64-linux-gnu libc6-dev-arm64-cross libprotobuf-dev protobuf-compiler
+          echo CARGO_BUILD_TARGET=aarch64-unknown-linux-gnu >> ${GITHUB_ENV}
+          echo CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc >> ${GITHUB_ENV}
       - run: |
-          sudo apt-get install --no-install-recommends --yes libprotobuf-dev musl-tools protobuf-compiler
-          rustup target add x86_64-unknown-linux-musl
-          cargo build --locked --release --target=x86_64-unknown-linux-musl
+          rustup target add ${{ env.CARGO_BUILD_TARGET }}
+          cargo build --locked --release
       - uses: actions/upload-artifact@v4
         with:
-          name: openai-proxy
-          path: target/x86_64-unknown-linux-musl/release/control-plane
+          name: ${{ matrix.platform }}
+          path: target/${{ env.CARGO_BUILD_TARGET }}/release/control-plane
   docker:
-    needs:
-      - cargo-build
+    needs: cargo-build
     runs-on: ubuntu-latest
     permissions:
       packages: write
     steps:
       - uses: actions/download-artifact@v4
-        with:
-          name: openai-proxy
       - run: |
           cat << 'EOD' > Dockerfile
-          FROM busybox
-          COPY --chmod=755 control-plane /usr/local/bin/openai-proxy-control-plane
+          FROM debian:trixie-slim
+          ARG TARGETOS
+          ARG TARGETARCH
+          COPY --chmod=755 ${TARGETOS}-${TARGETARCH}/control-plane /usr/local/bin/openai-proxy-control-plane
           EOD
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v5
         with:
           context: .
+          platforms: |
+            linux/amd64
+            linux/arm64
           push: true
           tags: ghcr.io/hakuyume/openai-proxy:${{ github.sha }}
