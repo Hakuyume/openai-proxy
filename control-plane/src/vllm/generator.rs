@@ -52,7 +52,7 @@ impl Generator<'_> {
             ..route_v3::HeaderMatcher::default()
         });
         route
-            .request_headers_to_add
+            .response_headers_to_add
             .push(core_v3::HeaderValueOption {
                 header: Some(core_v3::HeaderValue {
                     key: "content-type".to_owned(),
