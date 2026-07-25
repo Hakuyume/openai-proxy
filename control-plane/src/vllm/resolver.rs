@@ -1,6 +1,6 @@
 use futures::{Stream, StreamExt, TryFutureExt};
 use nom::Finish;
-use rand::{Rng, SeedableRng};
+use rand::RngExt;
 use std::time::{Duration, Instant};
 use tracing_futures::Instrument;
 
@@ -26,7 +26,7 @@ impl Resolver {
 
     pub(super) fn watch(&self) -> impl Stream<Item = schemas::List<schemas::Model>> + Send + '_ {
         futures::stream::unfold(
-            (rand::rngs::StdRng::from_os_rng(), Instant::now()),
+            (rand::make_rng::<rand::rngs::StdRng>(), Instant::now()),
             move |(mut rng, mut instant)| async move {
                 tokio::time::sleep_until(instant.into()).await;
                 let now = Instant::now();

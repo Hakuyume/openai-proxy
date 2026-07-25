@@ -1,5 +1,5 @@
 use futures::{FutureExt, Stream, TryFutureExt};
-use rand::{Rng, SeedableRng};
+use rand::RngExt;
 use serde::Deserialize;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
@@ -62,18 +62,13 @@ impl Resolver {
     pub(super) fn new() -> anyhow::Result<Self> {
         let tls_config = misc::hyper::tls_config().map_err(anyhow::Error::from_boxed)?;
         let resolver = {
-            let (config, mut opts) = hickory_resolver::system_conf::read_system_conf()?;
-            opts.ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
-            opts.cache_size = 0;
-            opts.try_tcp_on_error = true;
-            hickory_resolver::TokioResolver::builder_with_config(
-                config,
-                hickory_resolver::name_server::TokioConnectionProvider::default(),
-            )
-            .with_options(opts)
-            .build()
+            let mut builder = hickory_resolver::TokioResolver::builder_tokio()?;
+            builder.options_mut().ip_strategy =
+                hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
+            builder.options_mut().cache_size = 0;
+            builder.options_mut().try_tcp_on_error = true;
+            builder.build()?
         };
-
         Ok(Self {
             tls_config,
             resolver,
@@ -85,7 +80,7 @@ impl Resolver {
         upstream: &'a Upstream,
     ) -> impl Stream<Item = Vec<Endpoint>> + Send + 'a {
         futures::stream::unfold(
-            (rand::rngs::StdRng::from_os_rng(), Instant::now()),
+            (rand::make_rng::<rand::rngs::StdRng>(), Instant::now()),
             move |(mut rng, mut instant)| async move {
                 tokio::time::sleep_until(instant.into()).await;
                 let now = Instant::now();
@@ -106,18 +101,21 @@ impl Resolver {
                         tracing::warn!("missing host");
                         None
                     }
-                    .into_iter()
-                    .flatten()
                 };
-                let endpoints = futures::future::join_all(lookup_ip.map(|ip| {
-                    self.list_models(upstream, ip)
-                        .map(|output| {
-                            output
-                                .map(|schemas::List { data }| data)
-                                .unwrap_or_default()
-                        })
-                        .map(move |models| Endpoint { ip, models })
-                }))
+                let endpoints = futures::future::join_all(
+                    lookup_ip
+                        .iter()
+                        .flat_map(hickory_resolver::lookup_ip::LookupIp::iter)
+                        .map(|ip| {
+                            self.list_models(upstream, ip)
+                                .map(|output| {
+                                    output
+                                        .map(|schemas::List { data }| data)
+                                        .unwrap_or_default()
+                                })
+                                .map(move |models| Endpoint { ip, models })
+                        }),
+                )
                 .await;
                 Some((endpoints, (rng, instant)))
             },
