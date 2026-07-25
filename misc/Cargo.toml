@@ -16,5 +16,5 @@ prost.workspace = true
 prost-types.workspace = true
 rustls.workspace = true
 thiserror.workspace = true
-tonic-envoy.path = "../tonic-envoy"
+tonic-envoy = { workspace = true, features = ["pbjson"] }
 tower = { workspace = true, features = ["util"] }

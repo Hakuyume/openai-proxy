@@ -1968,6 +1968,7 @@ dependencies = [
 [[package]]
 name = "tonic-envoy"
 version = "0.1.0"
+source = "git+https://github.com/Hakuyume/tonic-envoy.git#60f48db4649d7dd7a10599d02f054e8cab15a55e"
 dependencies = [
  "pbjson",
  "pbjson-build",

@@ -29,7 +29,7 @@ sha2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-stream = { workspace = true, features = ["sync"] }
 tonic.workspace = true
-tonic-envoy.path = "../tonic-envoy"
+tonic-envoy = { workspace = true, features = ["bytes", "pbjson"] }
 tonic-health.workspace = true
 tonic-reflection.workspace = true
 tower-http = { workspace = true, features = ["trace"] }
