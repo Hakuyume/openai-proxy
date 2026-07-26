@@ -30,6 +30,7 @@ tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "sync
 tokio-net-incoming = { workspace = true, features = ["axum_0_8", "tonic_0_14"] }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 tokio-stream = { workspace = true, features = ["sync"] }
+toml.workspace = true
 tonic.workspace = true
 tonic-envoy = { workspace = true, features = ["bytes", "pbjson"] }
 tonic-health.workspace = true
