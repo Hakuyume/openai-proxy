@@ -114,6 +114,7 @@ impl Endpoint {
         B::Error: Into<Error>,
     {
         let inner = self.inner.clone();
+        *request.version_mut() = http::Version::default();
         request.headers_mut().remove(http::header::AUTHORIZATION);
         request.headers_mut().remove(http::header::COOKIE);
         request.headers_mut().remove(http::header::HOST);
