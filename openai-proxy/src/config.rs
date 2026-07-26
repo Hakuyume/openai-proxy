@@ -28,17 +28,22 @@ pub enum Authorization {
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
-pub enum Bearer {
-    #[serde(rename = "token_path")]
-    TokenPath(PathBuf),
+pub struct Bearer {
+    token: Token,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub enum Token {
+    #[serde(rename = "path")]
+    Path(PathBuf),
 }
 
 impl Authorization {
     pub async fn value(&self) -> Result<String, Error> {
         match self {
-            Self::Bearer(Bearer::TokenPath(path)) => {
-                Ok(format!("Bearer {}", tokio::fs::read_to_string(path).await?))
-            }
+            Self::Bearer(Bearer {
+                token: Token::Path(path),
+            }) => Ok(format!("Bearer {}", tokio::fs::read_to_string(path).await?)),
         }
     }
 }

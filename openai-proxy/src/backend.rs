@@ -59,7 +59,7 @@ pub async fn watch(
     let resolver = builder.build()?;
 
     let mut watch_backends = Vec::new();
-    let mut watch_endpoints = HashMap::new();
+    let mut watch_endpoints = HashMap::<_, (_, _, Option<Result<Vec<schemas::Model>, _>>)>::new();
     for config in config {
         match config.connection {
             Connection::Standard {
@@ -112,6 +112,28 @@ pub async fn watch(
     let mut version = 0;
     let mut is_ready = false;
     while !(watch_backends.is_empty() && watch_endpoints.is_empty()) {
+        if !is_ready
+            && watch_backends.iter().all(|(_, is_ready)| *is_ready)
+            && watch_endpoints
+                .values()
+                .all(|(_, _, models)| models.is_some())
+        {
+            is_ready = true
+        }
+        if is_ready {
+            let endpoints = watch_endpoints
+                .values()
+                .filter_map(|(_, endpoint, models)| {
+                    Some(Endpoint {
+                        endpoint: endpoint.clone(),
+                        models: models.as_ref()?.as_ref().ok()?.clone(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            tx.send(Some((version, Arc::from(endpoints))))?;
+            version += 1;
+        }
+
         let future_backends =
             watch_backends
                 .iter_mut()
@@ -158,28 +180,6 @@ pub async fn watch(
             Either::Right((endpoint_id, None)) => {
                 watch_endpoints.remove(&endpoint_id);
             }
-        }
-
-        if !is_ready
-            && watch_backends.iter().all(|(_, is_ready)| *is_ready)
-            && watch_endpoints
-                .values()
-                .all(|(_, _, models)| models.is_some())
-        {
-            is_ready = true
-        }
-        if is_ready {
-            let endpoints = watch_endpoints
-                .values()
-                .filter_map(|(_, endpoint, models)| {
-                    Some(Endpoint {
-                        endpoint: endpoint.clone(),
-                        models: models.as_ref()?.as_ref().ok()?.clone(),
-                    })
-                })
-                .collect::<Vec<_>>();
-            tx.send(Some((version, Arc::from(endpoints))))?;
-            version += 1;
         }
     }
 
