@@ -3,6 +3,7 @@ mod client;
 mod config;
 mod endpoint;
 mod frontend;
+mod header;
 
 use clap::Parser;
 use futures::StreamExt;
