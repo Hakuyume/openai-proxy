@@ -1,10 +1,13 @@
 mod backend;
+mod client;
 mod config;
 mod endpoint;
 mod frontend;
 
 use clap::Parser;
+use futures::StreamExt;
 use std::path::PathBuf;
+use std::pin;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -24,15 +27,10 @@ struct ConfigArgs {
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Config {
     frontends: Vec<frontend::Config>,
     backends: Vec<backend::Config>,
-}
-
-#[derive(Debug)]
-struct Endpoint {
-    endpoint: endpoint::Endpoint,
-    models: Vec<schemas::Model>,
 }
 
 #[tokio::main]
@@ -63,10 +61,14 @@ async fn main() -> Result<(), Error> {
     };
 
     let (tx, rx) = tokio::sync::watch::channel(None);
-    futures::future::try_join(
-        frontend::serve(config.frontends, rx),
-        backend::watch(config.backends, tx),
-    )
+    futures::future::try_join(frontend::serve(config.frontends, rx), async move {
+        let stream = backend::watch(config.backends).await?.enumerate();
+        let mut stream = pin::pin!(stream);
+        while let Some((version, endpoints)) = stream.next().await {
+            tx.send(Some((version, endpoints)))?;
+        }
+        Ok(())
+    })
     .await?;
     Ok(())
 }

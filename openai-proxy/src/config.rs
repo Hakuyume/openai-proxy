@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Bind {
     #[serde(rename = "tcp")]
     Tcp(SocketAddr),
@@ -22,17 +23,20 @@ impl Bind {
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Authorization {
     #[serde(rename = "bearer")]
     Bearer(Bearer),
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Bearer {
     token: Token,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Token {
     #[serde(rename = "path")]
     Path(PathBuf),

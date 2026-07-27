@@ -11,6 +11,7 @@ futures.workspace = true
 hickory-resolver.workspace = true
 http.workspace = true
 http-body.workspace = true
+http-body-server-sent-events.workspace = true
 http-body-util.workspace = true
 http-serde.workspace = true
 hyper = { workspace = true, features = ["http2", "server"] }
@@ -18,12 +19,13 @@ hyper-util = { workspace = true, features = ["service", "tokio"] }
 humantime-serde.workspace = true
 misc.path = "../misc"
 pbjson-types.workspace = true
+pin-project.workspace = true
 prost.workspace = true
 prost-types.workspace = true
 rand.workspace = true
 reqwest = { workspace = true, features = ["http2", "json", "rustls", "stream"] }
 schemas.path = "../schemas"
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
