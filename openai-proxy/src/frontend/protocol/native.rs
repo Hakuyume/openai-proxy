@@ -1,8 +1,9 @@
 use super::{Receiver, connection};
-use crate::{Error, client};
+use crate::{Error, client, endpoint};
 use axum::{extract, routing};
 use futures::{StreamExt, TryFutureExt};
 use rand::distr::Distribution;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -115,18 +116,38 @@ async fn stream_providers(
     extract::State(state): extract::State<State>,
 ) -> axum::response::Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, axum::Error>>>
 {
-    let stream = tokio_stream::wrappers::WatchStream::new(state.rx)
-        .map(futures::stream::iter)
-        .flatten()
-        .map(|(_, endpoints)| {
-            let mut providers = endpoints
-                .iter()
-                .flat_map(|endpoint| &endpoint.providers)
-                .collect::<Vec<_>>();
-            providers.sort_unstable_by_key(|provider| provider.id);
-            providers.dedup_by_key(|provider| provider.id);
-            axum::response::sse::Event::default().json_data(providers)
-        });
+    struct State {
+        stream: tokio_stream::wrappers::WatchStream<Option<(usize, Arc<[endpoint::Endpoint]>)>>,
+        dedup: misc::dedup::Dedup<Vec<schemas::Provider>>,
+    }
+
+    impl State {
+        async fn next(&mut self) -> Option<Result<axum::response::sse::Event, axum::Error>> {
+            loop {
+                if let Some((_, endpoints)) = self.stream.next().await? {
+                    let mut providers = endpoints
+                        .iter()
+                        .flat_map(|endpoint| &endpoint.providers)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    providers.sort_unstable_by_key(|provider| provider.id);
+                    providers.dedup_by_key(|provider| provider.id);
+
+                    if let Some(providers) = self.dedup.update(providers) {
+                        break Some(axum::response::sse::Event::default().json_data(providers));
+                    }
+                }
+            }
+        }
+    }
+
+    let stream = {
+        let state = State {
+            stream: tokio_stream::wrappers::WatchStream::new(state.rx),
+            dedup: misc::dedup::Dedup::default(),
+        };
+        futures::stream::unfold(state, async |mut state| Some((state.next().await?, state)))
+    };
     axum::response::Sse::new(stream)
         .keep_alive(axum::response::sse::KeepAlive::new().interval(state.keep_alive_interval))
 }

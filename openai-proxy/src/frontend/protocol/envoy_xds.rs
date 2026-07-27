@@ -99,11 +99,11 @@ impl aggregated_discovery_service_server::AggregatedDiscoveryService for Server 
         );
         let config = self.config.clone();
         let rx = self.rx.clone();
-        let mut clusters = None;
-        let mut route_configurations = None;
+        let mut dedup_clusters = misc::dedup::Dedup::default();
+        let mut dedup_route_configurations = misc::dedup::Dedup::default();
         let stream = stream.map(move |item| -> Result<_, tonic::Status> {
             let mut responses = Vec::new();
-            match item {
+            let item = match item {
                 Either::Left(request) => {
                     let request = request?;
                     tracing::info!(
@@ -112,60 +112,28 @@ impl aggregated_discovery_service_server::AggregatedDiscoveryService for Server 
                         request.type_url,
                         request.response_nonce,
                     );
-                    if request.type_url == cluster_v3::Cluster::type_url()
+                    if (request.type_url == cluster_v3::Cluster::type_url()
+                        || request.type_url == route_v3::RouteConfiguration::type_url())
                         && request.response_nonce.is_empty()
-                        && let Some((version, endpoints)) = rx.borrow().clone()
                     {
-                        let (clusters_next, _) = generate(&config, &endpoints)
-                            .map_err(|e| tonic::Status::internal(e.to_string()))?;
-                        if clusters
-                            .as_ref()
-                            .is_none_or(|clusters| *clusters != clusters_next)
-                        {
-                            responses.push(response(version, &clusters_next)?);
-                        }
-                        clusters = Some(clusters_next);
-                    } else if request.type_url == route_v3::RouteConfiguration::type_url()
-                        && request.response_nonce.is_empty()
-                        && let Some((version, endpoints)) = rx.borrow().clone()
-                    {
-                        let (_, route_configuration_next) = generate(&config, &endpoints)
-                            .map_err(|e| tonic::Status::internal(e.to_string()))?;
-                        let route_configurations_next = [route_configuration_next];
-                        if route_configurations
-                            .as_ref()
-                            .is_none_or(|route_configurations| {
-                                *route_configurations != route_configurations_next
-                            })
-                        {
-                            responses.push(response(version, &route_configurations_next)?);
-                        }
-                        route_configurations = Some(route_configurations_next);
+                        rx.borrow().clone()
+                    } else {
+                        None
                     }
                 }
-                Either::Right(Some((version, endpoints))) => {
-                    let (clusters_next, route_configuration_next) =
-                        generate(&config, &endpoints)
-                            .map_err(|e| tonic::Status::internal(e.to_string()))?;
-                    if clusters
-                        .as_ref()
-                        .is_none_or(|clusters| *clusters != clusters_next)
-                    {
-                        responses.push(response(version, &clusters_next)?);
-                    }
-                    clusters = Some(clusters_next);
-                    let route_configurations_next = [route_configuration_next];
-                    if route_configurations
-                        .as_ref()
-                        .is_none_or(|route_configurations| {
-                            *route_configurations != route_configurations_next
-                        })
-                    {
-                        responses.push(response(version, &route_configurations_next)?);
-                    }
-                    route_configurations = Some(route_configurations_next);
+                Either::Right(item) => item,
+            };
+            if let Some((version, endpoints)) = item {
+                let (clusters, route_configuration) = generate(&config, &endpoints)
+                    .map_err(|e| tonic::Status::internal(e.to_string()))?;
+                if let Some(clusters) = dedup_clusters.update(clusters) {
+                    responses.push(response(version, clusters)?);
                 }
-                _ => (),
+                if let Some(route_configurations) =
+                    dedup_route_configurations.update([route_configuration])
+                {
+                    responses.push(response(version, route_configurations)?);
+                }
             }
             Ok(responses)
         });

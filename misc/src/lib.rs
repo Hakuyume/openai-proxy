@@ -1,3 +1,4 @@
+pub mod dedup;
 pub mod future;
 pub mod metrics;
 pub mod pbjson;
