@@ -23,7 +23,7 @@ prost-types.workspace = true
 rand.workspace = true
 reqwest = { workspace = true, features = ["http2", "json", "rustls", "stream"] }
 schemas.path = "../schemas"
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }

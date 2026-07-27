@@ -1,102 +1,21 @@
+mod vllm;
+
 use crate::{Error, client};
-use futures::{FutureExt, TryFutureExt};
-use http_body_util::BodyExt;
-use std::time::Duration;
 
 #[derive(Clone, Debug, serde::Deserialize)]
-pub(super) enum Config {
+pub(super) struct Config(Inner);
+
+#[derive(Clone, Debug, serde::Deserialize)]
+enum Inner {
     #[serde(rename = "vllm")]
-    Vllm {
-        #[serde(default, with = "humantime_serde")]
-        interval: Duration,
-        #[serde(default, with = "humantime_serde")]
-        timeout: Option<Duration>,
-    },
+    Vllm(vllm::Config),
 }
 
 pub(super) fn watch(
     client: client::Client,
     config: Config,
 ) -> impl futures::Stream<Item = Result<Vec<schemas::Provider>, Error>> + Send {
-    match config {
-        Config::Vllm { interval, timeout } => {
-            struct State {
-                client: client::Client,
-                id: uuid::Uuid,
-                interval: misc::time::Interval,
-                timeout: Option<Duration>,
-            }
-
-            impl State {
-                async fn next(&mut self) -> Option<Result<Vec<schemas::Provider>, Error>> {
-                    self.interval.tick().await;
-                    let future = futures::future::try_join(
-                        list_models(&self.client),
-                        vllm_scrape_metrics(&self.client),
-                    );
-                    let future = if let Some(timeout) = self.timeout {
-                        tokio::time::timeout(timeout, future)
-                            .map(|output| output?)
-                            .left_future()
-                    } else {
-                        future.right_future()
-                    };
-                    match future.await {
-                        Ok((models, metrics)) => {
-                            let provider = schemas::Provider {
-                                id: self.id,
-                                models,
-                                metrics,
-                            };
-                            Some(Ok(vec![provider]))
-                        }
-                        Err(e) if client::is_closed(&e) => None,
-                        Err(e) => Some(Err(e)),
-                    }
-                }
-            }
-
-            let state = State {
-                client,
-                id: uuid::Uuid::new_v4(),
-                interval: misc::time::interval(interval),
-                timeout,
-            };
-            futures::stream::unfold(state, async |mut state| Some((state.next().await?, state)))
-        }
-    }
-}
-
-#[tracing::instrument(err(level = tracing::Level::WARN), skip_all)]
-async fn list_models(client: &client::Client) -> Result<Vec<schemas::Model>, Error> {
-    let response = get(client, "/v1/models").await?;
-    let body = serde_json::from_slice::<schemas::List<_>>(response.body())?;
-    Ok(body.data)
-}
-
-#[tracing::instrument(err(level = tracing::Level::WARN), skip_all)]
-async fn vllm_scrape_metrics(client: &client::Client) -> Result<schemas::Metrics, Error> {
-    let response = get(client, "/metrics").await?;
-    Ok(misc::metrics::parse_vllm(str::from_utf8(response.body())?)?)
-}
-
-async fn get(client: &client::Client, uri: &str) -> Result<http::Response<bytes::Bytes>, Error> {
-    #[derive(Debug, thiserror::Error)]
-    #[error("{0:?}")]
-    struct StatusError(http::Response<bytes::Bytes>);
-
-    let response = client
-        .send(http::Request::get(uri).body(http_body_util::Empty::new())?)
-        .await?;
-    let (parts, body) = response.into_parts();
-    let body = body
-        .collect()
-        .map_ok(http_body_util::Collected::to_bytes)
-        .await?;
-    let response = http::Response::from_parts(parts, body);
-    if response.status().is_success() {
-        Ok(response)
-    } else {
-        Err(StatusError(response).into())
+    match config.0 {
+        Inner::Vllm(config) => vllm::watch(client, config),
     }
 }
