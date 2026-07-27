@@ -6,9 +6,9 @@ use std::time::Duration;
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Config {
-    #[serde(default, with = "humantime_serde")]
+    #[serde(with = "humantime_serde")]
     interval: Duration,
-    #[serde(default, with = "humantime_serde")]
+    #[serde(with = "humantime_serde")]
     timeout: Duration,
 }
 

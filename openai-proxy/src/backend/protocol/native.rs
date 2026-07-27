@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 #[derive(Clone, Debug, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, tag = "version")]
 pub(super) enum Config {
     #[serde(rename = "1")]
     V1 {
