@@ -80,7 +80,11 @@ pub(super) fn watch(
         if let Some(sleep) = state.sleep.take() {
             sleep.await;
         }
-        let item = match state.next().await {
+        let item = match state
+            .next()
+            .inspect_err(|e| tracing::warn!(error = e.to_string()))
+            .await
+        {
             Ok(providers) => Some(Ok(providers)),
             Err(e) if client::is_closed(&e) => None,
             Err(e) => {
