@@ -1,9 +1,7 @@
 use nom::Finish;
 
-pub fn parse_metrics(
-    data: &[u8],
-) -> Result<schemas::Metrics, Box<dyn std::error::Error + Send + Sync>> {
-    let mut data = str::from_utf8(data)?.replace("\r\n", "\n");
+pub fn parse_vllm(data: &str) -> Result<schemas::Metrics, nom::error::Error<String>> {
+    let mut data = data.replace("\r\n", "\n");
     data.push_str("# EOF\n");
     let (_, exposition) = openmetrics_nom::exposition(data.as_str())
         .finish()
@@ -15,16 +13,18 @@ pub fn parse_metrics(
         .flat_map(|(_, metricfamily)| &metricfamily.metric)
         .flat_map(|(_, metric)| &metric.sample)
         .fold(schemas::Metrics::default(), |mut metrics, (_, sample)| {
-            if let Ok(v) = sample.number.parse::<f64>() {
-                match sample.metricname {
-                    "vllm:num_requests_running" => {
+            match sample.metricname {
+                "vllm:num_requests_running" => {
+                    if let Ok(v) = sample.number.parse::<f64>() {
                         *metrics.vllm_num_requests_running.get_or_insert_default() += v as u32;
                     }
-                    "vllm:num_requests_waiting" => {
+                }
+                "vllm:num_requests_waiting" => {
+                    if let Ok(v) = sample.number.parse::<f64>() {
                         *metrics.vllm_num_requests_waiting.get_or_insert_default() += v as u32;
                     }
-                    _ => (),
                 }
+                _ => (),
             }
             metrics
         });

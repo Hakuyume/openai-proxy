@@ -1,6 +1,6 @@
 mod envoy_xds;
 
-use crate::{Endpoint, Error, config, endpoint};
+use crate::{Error, client, config, endpoint};
 use axum::{Router, extract, routing};
 use futures::TryFutureExt;
 use rand::distr::Distribution;
@@ -43,7 +43,7 @@ enum Connection {
     },
 }
 
-type Receiver = tokio::sync::watch::Receiver<Option<(u64, Arc<[Endpoint]>)>>;
+type Receiver = tokio::sync::watch::Receiver<Option<(usize, Arc<[endpoint::Endpoint]>)>>;
 
 pub async fn serve(config: Vec<Config>, rx: Receiver) -> Result<(), Error> {
     futures::future::try_join_all(config.into_iter().map(|config| {
@@ -139,7 +139,9 @@ fn axum_router(body_limit: Option<usize>, rx: Receiver) -> Router {
         if let Some((_, endpoints)) = rx.borrow().clone() {
             let data = endpoints
                 .iter()
-                .flat_map(|endpoint| endpoint.models.clone())
+                .flat_map(|endpoint| &endpoint.providers)
+                .flat_map(|provider| &provider.models)
+                .cloned()
                 .collect();
             Ok(axum::Json(schemas::List { data }))
         } else {
@@ -151,7 +153,7 @@ fn axum_router(body_limit: Option<usize>, rx: Receiver) -> Router {
         extract::State(rx): extract::State<Receiver>,
         parts: http::request::Parts,
         body: bytes::Bytes,
-    ) -> Result<http::Response<endpoint::Body>, http::StatusCode> {
+    ) -> Result<http::Response<client::Body>, http::StatusCode> {
         #[derive(serde::Deserialize)]
         struct Body {
             model: String,
@@ -170,10 +172,13 @@ fn axum_router(body_limit: Option<usize>, rx: Receiver) -> Router {
         let endpoints = endpoints
             .iter()
             .flat_map(|endpoint| {
-                endpoint
-                    .models
-                    .iter()
-                    .filter_map(move |model| (model.id == *model_id).then_some((endpoint, model)))
+                endpoint.providers.iter().filter_map(move |provider| {
+                    provider
+                        .models
+                        .iter()
+                        .any(|model| model.id == *model_id)
+                        .then_some((endpoint, provider))
+                })
             })
             .collect::<Vec<_>>();
 
@@ -181,8 +186,12 @@ fn axum_router(body_limit: Option<usize>, rx: Receiver) -> Router {
             Err(http::StatusCode::SERVICE_UNAVAILABLE)
         } else {
             let dist =
-                rand::distr::weighted::WeightedIndex::new(endpoints.iter().map(|(_, model)| {
-                    1. / (1. + model.metrics.vllm_num_requests_waiting.unwrap_or_default() as f64)
+                rand::distr::weighted::WeightedIndex::new(endpoints.iter().map(|(_, provider)| {
+                    1. / (1.
+                        + provider
+                            .metrics
+                            .vllm_num_requests_waiting
+                            .unwrap_or_default() as f64)
                 }))
                 .map_err(|e| {
                     tracing::warn!(error = e.to_string());
@@ -192,7 +201,7 @@ fn axum_router(body_limit: Option<usize>, rx: Receiver) -> Router {
             let index = dist.sample(&mut rand::rng());
             let (endpoint, _) = &endpoints[index];
             let response = endpoint
-                .endpoint
+                .client
                 .send(http::Request::from_parts(
                     parts,
                     http_body_util::Full::new(body),

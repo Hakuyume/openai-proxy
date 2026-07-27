@@ -1,4 +1,4 @@
-use crate::{Endpoint, Error, config};
+use crate::{Error, client, config, endpoint};
 use futures::future::Either;
 use futures::{StreamExt, TryFutureExt, TryStreamExt};
 use prost::Name;
@@ -192,7 +192,7 @@ impl aggregated_discovery_service_server::AggregatedDiscoveryService for Server 
 impl Generator {
     fn generate(
         &self,
-        endpoints: &[Endpoint],
+        endpoints: &[endpoint::Endpoint],
     ) -> Result<(Vec<cluster_v3::Cluster>, route_v3::RouteConfiguration), Error> {
         fn cluster_name(endpoint_id: uuid::Uuid) -> String {
             format!("cluster_{}", endpoint_id.simple())
@@ -200,15 +200,36 @@ impl Generator {
 
         let endpoints = endpoints
             .iter()
-            .filter_map(|endpoint| Some((endpoint, endpoint.endpoint.info()?)))
+            .filter_map(|endpoint| {
+                if let client::Config::Standard(client::standard::Config {
+                    uri,
+                    http2_prior_knowledge,
+                    resolve: Some(resolve),
+                    unix_socket: None,
+                    authorization: None,
+                }) = endpoint.client.config()
+                    && uri.scheme() == Some(&http::uri::Scheme::HTTP)
+                {
+                    let port = if let Some(port) = uri.port_u16() {
+                        port
+                    } else if resolve.port() > 0 {
+                        resolve.port()
+                    } else {
+                        80
+                    };
+                    Some((endpoint, (resolve.ip(), port, *http2_prior_knowledge)))
+                } else {
+                    None
+                }
+            })
             .collect::<Vec<_>>();
 
         let mut clusters = Vec::new();
-        for (endpoint, info) in &endpoints {
+        for (endpoint, (ip, port, http2_prior_knowledge)) in &endpoints {
             let address = core_v3::address::Address::SocketAddress(core_v3::SocketAddress {
-                address: info.addr.ip().to_string(),
+                address: ip.to_string(),
                 port_specifier: Some(core_v3::socket_address::PortSpecifier::PortValue(
-                    info.addr.port() as _,
+                    *port as _,
                 )),
                 ..core_v3::SocketAddress::default()
             });
@@ -225,12 +246,12 @@ impl Generator {
             };
 
             let mut cluster = self.template_cluster.clone().unwrap_or_default();
-            cluster.name = cluster_name(endpoint.endpoint.id());
+            cluster.name = cluster_name(endpoint.id);
             cluster.cluster_discovery_type = Some(cluster_v3::cluster::ClusterDiscoveryType::Type(
                 cluster_v3::cluster::DiscoveryType::Static as _,
             ));
             let load_assignment = cluster.load_assignment.get_or_insert_default();
-            load_assignment.cluster_name = cluster_name(endpoint.endpoint.id());
+            load_assignment.cluster_name = cluster_name(endpoint.id);
             load_assignment
                 .endpoints
                 .push(endpoint_v3::LocalityLbEndpoints {
@@ -238,7 +259,7 @@ impl Generator {
                     ..endpoint_v3::LocalityLbEndpoints::default()
                 });
 
-            if info.http2_prior_knowledge {
+            if *http2_prior_knowledge {
                 use http_v3::http_protocol_options::explicit_http_config::ProtocolConfig;
                 let explicit_http_config = http_v3::http_protocol_options::ExplicitHttpConfig {
                     protocol_config: Some(ProtocolConfig::Http2ProtocolOptions(
@@ -271,7 +292,8 @@ impl Generator {
         {
             let mut data = endpoints
                 .iter()
-                .flat_map(|(endpoint, _)| &endpoint.models)
+                .flat_map(|(endpoint, _)| &endpoint.providers)
+                .flat_map(|provider| &provider.models)
                 .collect::<Vec<_>>();
             data.sort_unstable_by_key(|model| &model.id);
             let body = serde_json::to_string(&schemas::List { data })?;
@@ -318,13 +340,20 @@ impl Generator {
         {
             let mut models = BTreeMap::<_, BTreeMap<_, Vec<_>>>::new();
             for (endpoint, _) in &endpoints {
-                for model in &endpoint.models {
-                    models
-                        .entry(&model.id)
-                        .or_default()
-                        .entry(endpoint.endpoint.id())
-                        .or_default()
-                        .push(model.metrics.vllm_num_requests_waiting.unwrap_or_default());
+                for provider in &endpoint.providers {
+                    for model in &provider.models {
+                        models
+                            .entry(&model.id)
+                            .or_default()
+                            .entry(endpoint.id)
+                            .or_default()
+                            .push(
+                                provider
+                                    .metrics
+                                    .vllm_num_requests_waiting
+                                    .unwrap_or_default(),
+                            );
+                    }
                 }
             }
 
@@ -397,7 +426,7 @@ impl Generator {
 
 #[allow(clippy::result_large_err)]
 fn response<T>(
-    version_info: u64,
+    version_info: usize,
     resources: &[T],
 ) -> Result<discovery_v3::DiscoveryResponse, tonic::Status>
 where

@@ -7,17 +7,17 @@ pub struct Interval {
     period: Duration,
 }
 
-impl Interval {
-    pub fn new(period: Duration) -> Self {
-        let now = tokio::time::Instant::now();
-        Self {
-            sleep: Box::pin(tokio::time::sleep_until(
-                now + rand::rng().random_range(Duration::default()..period * 2 / 5),
-            )),
-            period,
-        }
+pub fn interval(period: Duration) -> Interval {
+    let now = tokio::time::Instant::now();
+    Interval {
+        sleep: Box::pin(tokio::time::sleep_until(
+            now + rand::rng().random_range(Duration::default()..period * 2 / 5),
+        )),
+        period,
     }
+}
 
+impl Interval {
     pub async fn tick(&mut self) {
         self.sleep.as_mut().await;
         let mut deadline = self.sleep.deadline();
