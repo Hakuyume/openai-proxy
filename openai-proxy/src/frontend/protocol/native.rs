@@ -1,7 +1,9 @@
 use super::{Receiver, connection};
-use crate::{Error, client, endpoint};
+use crate::{Error, client, endpoint, header};
+use axum::response::IntoResponse;
 use axum::{extract, routing};
 use futures::{StreamExt, TryFutureExt};
+use http_body_util::BodyExt;
 use rand::distr::Distribution;
 use std::sync::Arc;
 use std::time::Duration;
@@ -154,28 +156,57 @@ async fn stream_providers(
 
 async fn fallback(
     extract::State(state): extract::State<State>,
-    parts: http::request::Parts,
-    body: bytes::Bytes,
-) -> Result<http::Response<client::Body>, http::StatusCode> {
-    #[derive(serde::Deserialize)]
-    struct Body {
-        model: String,
-    }
+    request: http::Request<axum::body::Body>,
+) -> Result<http::Response<client::Body>, axum::response::Response> {
+    let (request, model_id) = if let Some(value) = request.headers().get(header::MODEL_ID)
+        && let Ok(value) = value
+            .to_str()
+            .inspect_err(|e| tracing::warn!(warn = e.to_string()))
+    {
+        let value = value.to_owned();
+        let request = request.map(http_body_util::BodyExt::boxed_unsync);
+        (request, value)
+    } else {
+        #[derive(serde::Deserialize)]
+        struct Body {
+            model: String,
+        }
 
-    let Body { model: model_id } = serde_json::from_slice(&body).map_err(|e| {
-        tracing::warn!(warn = e.to_string());
-        http::StatusCode::BAD_REQUEST
-    })?;
-    let model_id = &model_id;
+        let (mut parts, body) =
+            <(http::request::Parts, bytes::Bytes) as extract::FromRequest<()>>::from_request(
+                request,
+                &(),
+            )
+            .await?;
+        let Body { model } = serde_json::from_slice(&body).map_err(|e| {
+            tracing::warn!(warn = e.to_string());
+            http::StatusCode::BAD_REQUEST.into_response()
+        })?;
+
+        match http::HeaderValue::from_str(&model) {
+            Ok(value) => {
+                parts.headers.insert(header::MODEL_ID, value);
+            }
+            Err(e) => tracing::warn!(warn = e.to_string()),
+        }
+        let request = http::Request::from_parts(
+            parts,
+            http_body_util::Full::new(body)
+                .map_err(|e| match e {})
+                .boxed_unsync(),
+        );
+        (request, model)
+    };
 
     let (_, endpoints) = state
         .rx
         .borrow()
         .clone()
-        .ok_or(http::StatusCode::SERVICE_UNAVAILABLE)?;
+        .ok_or(http::StatusCode::SERVICE_UNAVAILABLE.into_response())?;
     let endpoints = endpoints
         .iter()
         .flat_map(|endpoint| {
+            let model_id = &model_id;
             endpoint.providers.iter().filter_map(move |provider| {
                 provider
                     .models
@@ -187,7 +218,7 @@ async fn fallback(
         .collect::<Vec<_>>();
 
     if endpoints.is_empty() {
-        Err(http::StatusCode::SERVICE_UNAVAILABLE)
+        Err(http::StatusCode::SERVICE_UNAVAILABLE.into_response())
     } else {
         let dist =
             rand::distr::weighted::WeightedIndex::new(endpoints.iter().map(|(_, provider)| {
@@ -199,20 +230,17 @@ async fn fallback(
             }))
             .map_err(|e| {
                 tracing::warn!(error = e.to_string());
-                http::StatusCode::INTERNAL_SERVER_ERROR
+                http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
             })?;
 
         let index = dist.sample(&mut rand::rng());
         let (endpoint, _) = &endpoints[index];
         let response = endpoint
             .client
-            .send(http::Request::from_parts(
-                parts,
-                http_body_util::Full::new(body),
-            ))
+            .send(request)
             .map_err(|e| {
                 tracing::warn!(error = e.to_string());
-                http::StatusCode::BAD_GATEWAY
+                http::StatusCode::BAD_GATEWAY.into_response()
             })
             .await?;
         Ok(response)

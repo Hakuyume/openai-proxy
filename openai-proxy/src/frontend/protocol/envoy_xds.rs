@@ -1,5 +1,5 @@
 use super::{Receiver, connection};
-use crate::{Error, client, endpoint};
+use crate::{Error, client, endpoint, header};
 use futures::future::Either;
 use futures::{StreamExt, TryFutureExt, TryStreamExt};
 use prost::Name;
@@ -355,6 +355,16 @@ fn generate(
                 }),
                 ..matcher_v3::MetadataMatcher::default()
             });
+            route
+                .response_headers_to_add
+                .push(core_v3::HeaderValueOption {
+                    header: Some(core_v3::HeaderValue {
+                        key: header::MODEL_ID.to_owned(),
+                        value: model_id.clone(),
+                        ..core_v3::HeaderValue::default()
+                    }),
+                    ..core_v3::HeaderValueOption::default()
+                });
             let action =
                 misc::get_or_insert_default!(&mut route.action, route_v3::route::Action::Route);
             let cluster_specifier = misc::get_or_insert_default!(
