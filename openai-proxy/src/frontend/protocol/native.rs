@@ -1,13 +1,19 @@
 use super::{Receiver, connection};
 use crate::{Error, client};
 use axum::{extract, routing};
-use futures::TryFutureExt;
+use futures::{StreamExt, TryFutureExt};
 use rand::distr::Distribution;
 use std::time::Duration;
 
 #[derive(Clone, Debug, serde::Deserialize)]
-pub(super) struct Config {
-    body_limit: Option<usize>,
+#[serde(deny_unknown_fields, tag = "version")]
+pub(super) enum Config {
+    #[serde(rename = "1")]
+    V1 {
+        body_limit: Option<usize>,
+        #[serde(with = "humantime_serde")]
+        keep_alive_interval: Duration,
+    },
 }
 
 pub(super) async fn serve(
@@ -15,22 +21,35 @@ pub(super) async fn serve(
     config: Config,
     rx: Receiver,
 ) -> Result<(), Error> {
+    let Config::V1 {
+        body_limit,
+        keep_alive_interval,
+    } = config;
     let app = axum::Router::new()
         .route("/health", routing::get(health))
         .route("/v1/models", routing::get(list_models))
+        .route("/providers", routing::get(stream_providers))
         .fallback(routing::any(fallback))
         .layer(tower::util::option_layer(
-            config.body_limit.map(extract::DefaultBodyLimit::max),
+            body_limit.map(extract::DefaultBodyLimit::max),
         ))
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .with_state(rx);
+        .with_state(State {
+            keep_alive_interval,
+            rx,
+        });
 
     match connection {
         connection::Config::Standard { bind } => {
             let listener = bind.bind().await?;
             axum::serve(listener, app).await?;
         }
-        connection::Config::Tunnel { uri, authorization } => {
+        connection::Config::Tunnel {
+            uri,
+            authorization,
+            keep_alive_interval,
+            retry_delay,
+        } => {
             let service = hyper_util::service::TowerToHyperService::new(app);
             let serve = async || -> Result<(), Error> {
                 let mut builder =
@@ -43,7 +62,7 @@ pub(super) async fn serve(
                 }
                 let (stream, _) = tokio_tungstenite::connect_async(builder).await?;
                 hyper::server::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
-                    .keep_alive_interval(Duration::from_secs(5))
+                    .keep_alive_interval(keep_alive_interval)
                     .timer(hyper_util::rt::TokioTimer::new())
                     .serve_connection(misc::tungstenite::Io::new(stream), service.clone())
                     .await?;
@@ -53,7 +72,7 @@ pub(super) async fn serve(
             loop {
                 if let Err(e) = serve().await {
                     tracing::warn!(error = e.to_string());
-                    tokio::time::sleep(Duration::from_secs(1)).await
+                    tokio::time::sleep(retry_delay).await
                 }
             }
         }
@@ -62,8 +81,14 @@ pub(super) async fn serve(
     Ok(())
 }
 
-async fn health(extract::State(rx): extract::State<Receiver>) -> http::StatusCode {
-    if rx.borrow().is_some() {
+#[derive(Clone)]
+struct State {
+    keep_alive_interval: Duration,
+    rx: Receiver,
+}
+
+async fn health(extract::State(state): extract::State<State>) -> http::StatusCode {
+    if state.rx.borrow().is_some() {
         http::StatusCode::OK
     } else {
         http::StatusCode::SERVICE_UNAVAILABLE
@@ -71,9 +96,9 @@ async fn health(extract::State(rx): extract::State<Receiver>) -> http::StatusCod
 }
 
 async fn list_models(
-    extract::State(rx): extract::State<Receiver>,
+    extract::State(state): extract::State<State>,
 ) -> Result<axum::Json<schemas::List<schemas::Model>>, http::StatusCode> {
-    if let Some((_, endpoints)) = rx.borrow().clone() {
+    if let Some((_, endpoints)) = state.rx.borrow().clone() {
         let data = endpoints
             .iter()
             .flat_map(|endpoint| &endpoint.providers)
@@ -86,8 +111,28 @@ async fn list_models(
     }
 }
 
+async fn stream_providers(
+    extract::State(state): extract::State<State>,
+) -> axum::response::Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, axum::Error>>>
+{
+    let stream = tokio_stream::wrappers::WatchStream::new(state.rx)
+        .map(futures::stream::iter)
+        .flatten()
+        .map(|(_, endpoints)| {
+            let mut providers = endpoints
+                .iter()
+                .flat_map(|endpoint| &endpoint.providers)
+                .collect::<Vec<_>>();
+            providers.sort_unstable_by_key(|provider| provider.id);
+            providers.dedup_by_key(|provider| provider.id);
+            axum::response::sse::Event::default().json_data(providers)
+        });
+    axum::response::Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::new().interval(state.keep_alive_interval))
+}
+
 async fn fallback(
-    extract::State(rx): extract::State<Receiver>,
+    extract::State(state): extract::State<State>,
     parts: http::request::Parts,
     body: bytes::Bytes,
 ) -> Result<http::Response<client::Body>, http::StatusCode> {
@@ -102,7 +147,8 @@ async fn fallback(
     })?;
     let model_id = &model_id;
 
-    let (_, endpoints) = rx
+    let (_, endpoints) = state
+        .rx
         .borrow()
         .clone()
         .ok_or(http::StatusCode::SERVICE_UNAVAILABLE)?;

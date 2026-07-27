@@ -5,9 +5,11 @@ use crate::{Error, client};
 use futures::StreamExt;
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Config(Inner);
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 enum Inner {
     #[serde(rename = "standard")]
     Standard(standard::Config),

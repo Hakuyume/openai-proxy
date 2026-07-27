@@ -6,6 +6,7 @@ use futures::TryFutureExt;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Config {
     connection: connection::Config,
     protocol: protocol::Config,

@@ -1,14 +1,15 @@
 use crate::{Error, client};
-use futures::{FutureExt, TryFutureExt};
+use futures::TryFutureExt;
 use http_body_util::BodyExt;
 use std::time::Duration;
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Config {
     #[serde(default, with = "humantime_serde")]
     interval: Duration,
     #[serde(default, with = "humantime_serde")]
-    timeout: Option<Duration>,
+    timeout: Duration,
 }
 
 pub(super) fn watch(
@@ -19,35 +20,23 @@ pub(super) fn watch(
         client: client::Client,
         id: uuid::Uuid,
         interval: misc::time::Interval,
-        timeout: Option<Duration>,
+        timeout: Duration,
     }
 
     impl State {
-        async fn next(&mut self) -> Option<Result<Vec<schemas::Provider>, Error>> {
+        async fn next(&mut self) -> Result<schemas::Provider, Error> {
             self.interval.tick().await;
             let future = futures::future::try_join(
                 list_models(&self.client),
                 vllm_scrape_metrics(&self.client),
             );
-            let future = if let Some(timeout) = self.timeout {
-                tokio::time::timeout(timeout, future)
-                    .map(|output| output?)
-                    .left_future()
-            } else {
-                future.right_future()
+            let (models, metrics) = tokio::time::timeout(self.timeout, future).await??;
+            let provider = schemas::Provider {
+                id: self.id,
+                models,
+                metrics,
             };
-            match future.await {
-                Ok((models, metrics)) => {
-                    let provider = schemas::Provider {
-                        id: self.id,
-                        models,
-                        metrics,
-                    };
-                    Some(Ok(vec![provider]))
-                }
-                Err(e) if client::is_closed(&e) => None,
-                Err(e) => Some(Err(e)),
-            }
+            Ok(provider)
         }
     }
 
@@ -57,7 +46,14 @@ pub(super) fn watch(
         interval: misc::time::interval(config.interval),
         timeout: config.timeout,
     };
-    futures::stream::unfold(state, async |mut state| Some((state.next().await?, state)))
+    futures::stream::unfold(state, async |mut state| {
+        let item = match state.next().await {
+            Ok(provider) => Some(Ok(vec![provider])),
+            Err(e) if client::is_closed(&e) => None,
+            Err(e) => Some(Err(e)),
+        };
+        Some((item?, state))
+    })
 }
 
 #[tracing::instrument(err(level = tracing::Level::WARN), skip_all)]

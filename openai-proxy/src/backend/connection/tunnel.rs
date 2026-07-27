@@ -5,6 +5,7 @@ use std::time::Duration;
 use tracing::Instrument;
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Config {
     bind: config::Bind,
     keep_alive_interval: Duration,

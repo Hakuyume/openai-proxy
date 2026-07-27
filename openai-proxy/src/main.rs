@@ -27,6 +27,7 @@ struct ConfigArgs {
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Config {
     frontends: Vec<frontend::Config>,
     backends: Vec<backend::Config>,

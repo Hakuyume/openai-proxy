@@ -18,6 +18,7 @@ use tonic_envoy::envoy::r#type::matcher::v3 as matcher_v3;
 pub(super) type Config = Arc<Inner>;
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Inner {
     route_config_name: String,
     metadata_namespace: String,

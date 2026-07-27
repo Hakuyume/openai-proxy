@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Config {
     #[serde(with = "http_serde::uri")]
     uri: http::Uri,
@@ -18,6 +19,7 @@ pub(super) struct Config {
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Resolve {
     #[serde(with = "humantime_serde")]
     interval: Duration,
