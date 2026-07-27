@@ -8,6 +8,7 @@ use tracing::Instrument;
 #[serde(deny_unknown_fields)]
 pub(super) struct Config {
     bind: config::Bind,
+    #[serde(with = "humantime_serde")]
     keep_alive_interval: Duration,
 }
 
