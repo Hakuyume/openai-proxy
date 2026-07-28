@@ -356,7 +356,7 @@ fn generate(
                 ..matcher_v3::MetadataMatcher::default()
             });
             route
-                .response_headers_to_add
+                .request_headers_to_add
                 .push(core_v3::HeaderValueOption {
                     header: Some(core_v3::HeaderValue {
                         key: header::MODEL_ID.to_owned(),
