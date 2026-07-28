@@ -64,7 +64,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}
-          path: target/${{ env.CARGO_BUILD_TARGET }}/release/openai-proxy
+          path: target/${{ env.CARGO_BUILD_TARGET }}/release/haori
   docker:
     needs: cargo-build
     runs-on: ubuntu-latest
@@ -78,7 +78,8 @@ jobs:
           RUN apt-get update && apt-get install --yes ca-certificates
           ARG TARGETOS
           ARG TARGETARCH
-          COPY --chmod=755 ${TARGETOS}-${TARGETARCH}/openai-proxy /usr/local/bin/openai-proxy
+          COPY --chmod=755 ${TARGETOS}-${TARGETARCH}/haori /usr/local/bin/haori
+          ENTRYPOINT ["/usr/local/bin/haori"]
           EOD
       - uses: docker/login-action@v3
         with:
@@ -93,4 +94,4 @@ jobs:
             linux/amd64
             linux/arm64
           push: true
-          tags: ghcr.io/hakuyume/openai-proxy:${{ github.sha }}
+          tags: ghcr.io/hakuyume/haori:${{ github.sha }}
