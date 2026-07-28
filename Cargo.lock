@@ -623,6 +623,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "haori"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "clap",
+ "futures",
+ "hickory-resolver",
+ "http",
+ "http-body",
+ "http-body-server-sent-events",
+ "http-body-util",
+ "http-serde",
+ "humantime-serde",
+ "hyper",
+ "hyper-util",
+ "misc",
+ "pbjson-types",
+ "pin-project",
+ "prost",
+ "prost-types",
+ "rand",
+ "reqwest",
+ "schemas",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-net-incoming",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "toml",
+ "tonic",
+ "tonic-envoy",
+ "tonic-health",
+ "tonic-reflection",
+ "tower",
+ "tower-http 0.7.0",
+ "tracing",
+ "tracing-futures",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1268,51 +1313,6 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
-name = "openai-proxy"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bytes",
- "clap",
- "futures",
- "hickory-resolver",
- "http",
- "http-body",
- "http-body-server-sent-events",
- "http-body-util",
- "http-serde",
- "humantime-serde",
- "hyper",
- "hyper-util",
- "misc",
- "pbjson-types",
- "pin-project",
- "prost",
- "prost-types",
- "rand",
- "reqwest",
- "schemas",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-net-incoming",
- "tokio-stream",
- "tokio-tungstenite",
- "toml",
- "tonic",
- "tonic-envoy",
- "tonic-health",
- "tonic-reflection",
- "tower",
- "tower-http 0.7.0",
- "tracing",
- "tracing-futures",
- "tracing-subscriber",
- "uuid",
-]
 
 [[package]]
 name = "openmetrics-nom"

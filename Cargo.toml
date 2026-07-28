@@ -1,5 +1,5 @@
 [workspace]
-members = ["misc", "openai-proxy", "schemas"]
+members = ["haori", "misc", "schemas"]
 resolver = "3"
 
 [workspace.dependencies]
