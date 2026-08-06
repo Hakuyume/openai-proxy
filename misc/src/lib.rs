@@ -5,6 +5,7 @@ pub mod metrics;
 pub mod pbjson;
 pub mod time;
 pub mod tungstenite;
+pub mod watch;
 
 #[macro_export]
 macro_rules! get_or_insert_default {

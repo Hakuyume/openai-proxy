@@ -66,7 +66,7 @@ async fn main() -> Result<(), Error> {
         let stream = backend::watch(config.backends).await?.enumerate();
         let mut stream = pin::pin!(stream);
         while let Some((version, endpoints)) = stream.next().await {
-            tx.send(Some((version, endpoints)))?;
+            tx.send(Some((version, endpoints.into())))?;
         }
         Ok(())
     })
