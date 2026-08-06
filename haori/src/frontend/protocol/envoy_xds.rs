@@ -231,11 +231,9 @@ fn generate(
                 lb_endpoints: vec![lb_endpoint],
                 ..endpoint_v3::LocalityLbEndpoints::default()
             });
-
         if *http2_prior_knowledge {
             misc::envoy::http2_protocol_options(&mut cluster)?;
         }
-
         clusters.push(cluster);
     }
 
