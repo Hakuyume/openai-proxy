@@ -1229,6 +1229,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures",
+ "http",
  "hyper",
  "nom",
  "openmetrics-nom",
@@ -1238,8 +1239,12 @@ dependencies = [
  "prost-types",
  "rand",
  "schemas",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-tungstenite",
+ "tonic-envoy",
+ "uuid",
 ]
 
 [[package]]
