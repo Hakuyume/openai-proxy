@@ -1,4 +1,5 @@
 pub mod dedup;
+pub mod envoy;
 pub mod future;
 pub mod metrics;
 pub mod pbjson;
@@ -16,6 +17,6 @@ macro_rules! get_or_insert_default {
                 unreachable!()
             };
             value
-        };
+        }
     };
 }
