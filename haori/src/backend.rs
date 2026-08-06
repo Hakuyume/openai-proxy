@@ -24,20 +24,19 @@ pub(super) async fn watch(
     for config in config {
         let stream = connection::watch(resolver.clone(), config.connection).await?;
         let protocol = config.protocol;
-        streams.push(
-            stream
-                .map(move |item| {
-                    let protocol = protocol.clone();
-                    item.into_iter().map(move |(client, abort_registration)| {
-                        let stream = protocol::watch(client.clone(), protocol.clone());
-                        let id = uuid::Uuid::new_v4();
-                        futures::future::Abortable::new(stream, abort_registration)
-                            .map_ok(move |providers| (id, client.clone(), providers))
-                            .boxed()
-                    })
+        let stream = stream
+            .map(move |item| {
+                let protocol = protocol.clone();
+                item.into_iter().map(move |(client, abort_registration)| {
+                    let stream = protocol::watch(client.clone(), protocol.clone());
+                    let id = uuid::Uuid::new_v4();
+                    futures::future::Abortable::new(stream, abort_registration)
+                        .map_ok(move |providers| (id, client.clone(), providers))
+                        .boxed()
                 })
-                .boxed(),
-        );
+            })
+            .boxed();
+        streams.push(stream);
     }
     let stream = misc::watch::watch(streams, |(id, client, providers)| endpoint::Endpoint {
         id: *id,
