@@ -26,10 +26,8 @@ pub(super) fn watch(
     impl State {
         async fn next(&mut self) -> Result<schemas::Provider, Error> {
             self.interval.tick().await;
-            let future = futures::future::try_join(
-                list_models(&self.client),
-                vllm_scrape_metrics(&self.client),
-            );
+            let future =
+                futures::future::try_join(list_models(&self.client), scrape_metrics(&self.client));
             let (models, metrics) = tokio::time::timeout(self.timeout, future).await??;
             let provider = schemas::Provider {
                 id: self.id,
@@ -64,7 +62,7 @@ async fn list_models(client: &client::Client) -> Result<Vec<schemas::Model>, Err
 }
 
 #[tracing::instrument(err(level = tracing::Level::WARN), skip_all)]
-async fn vllm_scrape_metrics(client: &client::Client) -> Result<schemas::Metrics, Error> {
+async fn scrape_metrics(client: &client::Client) -> Result<schemas::Metrics, Error> {
     let response = get(client, "/metrics").await?;
     Ok(misc::metrics::parse_vllm(str::from_utf8(response.body())?)?)
 }
